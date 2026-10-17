@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo/lockup.png" alt="Nesso" width="320">
+</p>
+
 # Nesso
 
 Il progetto si chiama Nesso. L'applicazione sta in questa cartella: è il legame fra EspoCRM e un sistema esterno. Il canale, la scheda e l'abbinamento dei campi si configurano.

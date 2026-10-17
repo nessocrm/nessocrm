@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo/lockup.png" alt="Nesso" width="440">
+</p>
+
 # Nesso
 
 Nesso collega EspoCRM a un sistema esterno, solo tramite le API di Espo. Il canale, la scheda e i campi si configurano.

@@ -1,3 +1,5 @@
+![Nesso](img/lockup-su-chiaro.svg){ width="360" }
+
 # Nesso
 
 Manuale di Nesso. Il fatto e il non fatto sono in [00-progetto.md](00-progetto.md). La fotografia di un backup di produzione non fa parte di questo repo.
