@@ -143,6 +143,53 @@ def espo_request(method: str, path: str, body: dict | None = None, query: dict |
         return error.code, parsed
 
 
+def resolve_import_file(name: str) -> Path:
+    raw = str(name or "").strip().replace("\\", "/")
+    rel = Path(raw)
+    if not raw or rel.is_absolute() or any(part == ".." for part in rel.parts):
+        raise RuntimeError("file non consentito")
+    roots = [Path(os.environ.get("DEMO_DIR", "/demo")), SCAMBIO]
+    for root in roots:
+        base = root.resolve()
+        candidate = (base / rel).resolve()
+        if candidate.is_file() and (candidate == base or base in candidate.parents):
+            return candidate
+    raise RuntimeError(f"file non trovato: {name}")
+
+
+def upload_attachment(path: Path) -> str:
+    mime = "application/pdf" if path.suffix.lower() == ".pdf" else "application/octet-stream"
+    boundary = "----Nesso" + hashlib.sha256(path.name.encode()).hexdigest()[:16]
+    chunks = []
+    for field, value in (("role", "Attachment"), ("field", "file"), ("parentType", "Document")):
+        chunks.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n".encode()
+        )
+    chunks.append(
+        (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{path.name}\"\r\n"
+            f"Content-Type: {mime}\r\n\r\n"
+        ).encode()
+        + path.read_bytes()
+        + b"\r\n"
+    )
+    chunks.append(f"--{boundary}--\r\n".encode())
+    token = __import__("base64").b64encode(f"{ESPO_USER}:{ESPO_PASSWORD}".encode()).decode()
+    req = urllib.request.Request(ESPO_BASE + "/api/v1/Attachment", data=b"".join(chunks), method="POST")
+    req.add_header("Espo-Authorization", token)
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    req.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            result = json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as error:
+        raw = error.read().decode()
+        raise RuntimeError(f"caricamento file HTTP {error.code}: {raw}") from error
+    if not isinstance(result, dict) or not result.get("id"):
+        raise RuntimeError(f"caricamento file senza id: {result}")
+    return result["id"]
+
+
 def espo_up() -> bool:
     try:
         with urllib.request.urlopen(ESPO_BASE + "/", timeout=5) as response:
@@ -386,10 +433,36 @@ def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: 
                     f"nessun {rule['lookupEntity']} con {rule['lookupBy']} uguale a {value}"
                 )
             mapped[rule["to"]] = found
+            if rule.get("parentType"):
+                mapped["parentType"] = rule["parentType"]
+            continue
+        if rule.get("transform") == "lookups":
+            raw = str(payload.get(rule["from"]) or "")
+            parts = [part.strip() for part in re.split(r"[;,]", raw) if part.strip()]
+            if not parts:
+                continue
+            ids = []
+            for part in parts:
+                found = find_by_key(rule["lookupEntity"], rule["lookupBy"], part)
+                if not found:
+                    raise RuntimeError(
+                        f"nessun {rule['lookupEntity']} con {rule['lookupBy']} uguale a {part}"
+                    )
+                ids.append(found)
+            mapped[rule["to"]] = ids
+            continue
+        if rule.get("transform") == "file":
+            raw = str(payload.get(rule["from"]) or "").strip()
+            if not raw:
+                continue
+            mapped[rule["to"]] = upload_attachment(resolve_import_file(raw))
             continue
         value = apply_transform(rule, payload)
         if value is not None and value != "":
-            mapped[rule["to"]] = value
+            if rule.get("kind") == "bool":
+                mapped[rule["to"]] = str(value).strip().lower() in {"1", "true", "si", "sì", "yes"}
+            else:
+                mapped[rule["to"]] = value
     if key:
         mapped[key_field] = key
     return mapped
@@ -581,6 +654,13 @@ def snapshot() -> dict:
 WRITABLE = {
     "varchar", "text", "enum", "email", "phone", "int", "float", "bool",
     "date", "datetime", "datetimeOptional", "url", "wysiwyg", "multiEnum", "currency",
+    "password",
+}
+# Schede usate da un CRM aziendale che Espo non marca come object+tab.
+CATALOG_ALSO = {
+    "Team", "Role", "DocumentFolder", "KnowledgeBaseCategory",
+    "EmailTemplate", "Template", "TargetListCategory", "EmailTemplateCategory",
+    "Report", "BpmnFlowchart",
 }
 CATALOG: dict = {"at": 0.0, "data": None}
 
@@ -612,7 +692,9 @@ def load_catalog() -> list[dict]:
     for name, scope in scopes.items():
         if not isinstance(scope, dict):
             continue
-        if not scope.get("entity") or not scope.get("object") or not scope.get("tab") or scope.get("disabled"):
+        if not scope.get("entity") or scope.get("disabled"):
+            continue
+        if not (scope.get("object") and scope.get("tab")) and name not in CATALOG_ALSO:
             continue
         field_code, fields = espo_request(
             "GET", "/api/v1/Metadata", query={"key": f"entityDefs.{name}.fields"}
@@ -632,14 +714,41 @@ def load_catalog() -> list[dict]:
             if not isinstance(field_def, dict):
                 continue
             link = links.get(field_name) if isinstance(links.get(field_name), dict) else {}
-            if field_def.get("type") == "link" and not field_def.get("readOnly") and link.get("type") == "belongsTo" and link.get("entity"):
-                label = link_labels.get(field_name) or field_labels.get(field_name) or field_name
+            if field_def.get("readOnly") or field_def.get("disabled"):
+                continue
+            label = link_labels.get(field_name) or field_labels.get(field_name) or field_name
+            if field_def.get("type") == "link" and link.get("type") == "belongsTo" and link.get("entity"):
                 usable.append({
                     "name": field_name,
                     "idName": field_name + "Id",
                     "label": f"{label} (collegamento)",
                     "type": "link",
                     "foreignEntity": link.get("entity"),
+                })
+                continue
+            if field_def.get("type") == "linkMultiple" and link.get("type") == "hasMany" and link.get("entity"):
+                usable.append({
+                    "name": field_name,
+                    "idName": field_name + "Ids",
+                    "label": f"{label} (più collegamenti)",
+                    "type": "linkMultiple",
+                    "foreignEntity": link.get("entity"),
+                })
+                continue
+            if field_def.get("type") == "linkParent":
+                usable.append({
+                    "name": field_name,
+                    "idName": field_name + "Id",
+                    "label": f"{label} (attività sulla scheda)",
+                    "type": "linkParent",
+                })
+                continue
+            if field_def.get("type") == "file":
+                usable.append({
+                    "name": field_name,
+                    "idName": field_name + "Id",
+                    "label": f"{label} (file)",
+                    "type": "file",
                 })
                 continue
             if field_def.get("type") not in WRITABLE or field_def.get("readOnly") or field_def.get("disabled"):
@@ -665,6 +774,20 @@ def load_catalog() -> list[dict]:
     return entities
 
 
+def prepare_lookup(catalog: list[dict], foreign: str, lookup_by: str) -> tuple[dict, str]:
+    foreign_meta = next((item for item in catalog if item["name"] == foreign), None)
+    if foreign_meta is None:
+        raise RuntimeError("scegli la scheda a cui collegare il record")
+    lookup_by = lookup_by or foreign_meta["keyField"]
+    known = {field["name"] for field in foreign_meta["fields"]}
+    if lookup_by not in known:
+        if lookup_by == foreign_meta["keyField"]:
+            ensure_field(foreign, "externalKey", "Chiave esterna", 180)
+        else:
+            raise RuntimeError("campo di riconoscimento non trovato sulla scheda collegata")
+    return foreign_meta, lookup_by
+
+
 def compile_rules(entity: str, rules: list, creating: bool, back_label: str | None = None) -> list[dict]:
     catalog = load_catalog()
     meta = next((item for item in catalog if item["name"] == entity), None)
@@ -679,18 +802,37 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
         role = rule.get("role") or "field"
         if not source or not target:
             continue
-        if role == "link":
+        if role in ("link", "links", "parent"):
             foreign = str(rule.get("lookupEntity") or "").strip()
-            foreign_meta = next((item for item in catalog if item["name"] == foreign), None)
-            if foreign_meta is None:
-                raise RuntimeError("scegli la scheda a cui collegare il record")
-            lookup_by = str(rule.get("lookupBy") or "").strip() or foreign_meta["keyField"]
-            known = {field["name"] for field in foreign_meta["fields"]}
-            if lookup_by not in known:
-                if lookup_by == foreign_meta["keyField"]:
-                    ensure_field(foreign, "externalKey", "Chiave esterna", 180)
-                else:
-                    raise RuntimeError("campo di riconoscimento non trovato sulla scheda collegata")
+            foreign_meta, lookup_by = prepare_lookup(catalog, foreign, str(rule.get("lookupBy") or "").strip())
+            if role == "parent":
+                compiled.append({
+                    "from": source,
+                    "to": "parentId",
+                    "transform": "lookup",
+                    "lookupEntity": foreign,
+                    "lookupBy": lookup_by,
+                    "parentType": foreign,
+                })
+                continue
+            if role == "links":
+                chosen = by_name.get(target)
+                if not (chosen and chosen.get("type") == "linkMultiple" and chosen.get("foreignEntity") == foreign):
+                    matches = [
+                        field for field in meta["fields"]
+                        if field.get("type") == "linkMultiple" and field.get("foreignEntity") == foreign
+                    ]
+                    if len(matches) != 1:
+                        raise RuntimeError("indica il collegamento multiplo verso " + foreign)
+                    chosen = matches[0]
+                compiled.append({
+                    "from": source,
+                    "to": chosen["idName"],
+                    "transform": "lookups",
+                    "lookupEntity": foreign,
+                    "lookupBy": lookup_by,
+                })
+                continue
             existing = by_name.get(target)
             if existing and existing.get("type") == "link" and existing.get("foreignEntity") == foreign:
                 link_name = target
@@ -705,6 +847,15 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
             })
             layout_names.append(link_name)
             continue
+        chosen = by_name.get(target)
+        if chosen and chosen.get("type") == "file":
+            compiled.append({"from": source, "to": chosen["idName"], "transform": "file"})
+            continue
+        if chosen and chosen.get("type") == "bool":
+            compiled.append({"from": source, "to": target, "transform": "copy", "kind": "bool"})
+            continue
+        if chosen and chosen.get("type") in ("linkMultiple", "linkParent"):
+            raise RuntimeError("questo collegamento va indicato come collegamento a più record, o come attività")
         if creating and (target not in by_name or by_name[target].get("type") == "link"):
             requested = camel_name(target)
             actual = ensure_field(entity, requested, target, 180)
@@ -1191,6 +1342,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
+        if path.startswith("/fonts/"):
+            name = Path(path).name
+            font = Path(__file__).with_name("fonts") / name
+            if name.endswith(".woff2") and font.is_file():
+                raw = font.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "font/woff2")
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
         try:
             if path == "/api/state":
                 self.send_json(200, snapshot())

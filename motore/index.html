@@ -5,70 +5,163 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nesso</title>
   <style>
-    :root { color-scheme: light; }
+    @font-face { font-family: Inter; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/Inter-Regular.woff2") format("woff2"); }
+    @font-face { font-family: Inter; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/Inter-Medium.woff2") format("woff2"); }
+    @font-face { font-family: Inter; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/Inter-SemiBold.woff2") format("woff2"); }
+    :root { color-scheme: light; --nav-width: 232px; --nav-min: 50px; }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: "Segoe UI", sans-serif; background: #f4f6f8; color: #1c2430; line-height: 1.45; }
-    a { color: #0b3a66; }
-    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
-      outline: 3px solid #0b57d0; outline-offset: 2px;
-    }
-    .skip { position: absolute; left: 8px; top: -40px; background: #fff; padding: 8px 12px; z-index: 3; }
+    body { margin: 0; font-family: Inter, "Segoe UI", sans-serif; font-size: 14px; background: #f1f3f5; color: #262626; line-height: 1.45; }
+    a { color: #245b8c; }
+    a:hover { color: #1a4163; }
+    a:focus-visible, button:focus-visible { outline: 2px solid #66afe9; outline-offset: 2px; }
+    .skip { position: absolute; left: 8px; top: -40px; background: #fff; padding: 8px 12px; z-index: 30; }
     .skip:focus { top: 8px; }
     .sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
-    .top { background: #16324f; color: #fff; }
-    .brand { margin: 0; padding: 14px 20px 0; font-size: 14px; letter-spacing: .02em; }
-    nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 12px; }
-    nav a { color: #fff; text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; padding: 0 14px; border-radius: 8px; border: 2px solid transparent; }
-    nav a[aria-current="page"] { background: #fff; color: #16324f; border-color: #fff; }
-    main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
-    h1 { font-size: 1.8rem; margin: 0 0 8px; }
-    h2 { font-size: 1.15rem; margin: 0; }
-    .lead { font-size: 1.05rem; margin-top: 0; }
-    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-    button, .btn { font: inherit; min-height: 44px; border-radius: 8px; padding: 8px 16px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; border: 2px solid #16324f; background: #16324f; color: #fff; }
-    button.secondary, a.secondary { background: #fff; color: #16324f; }
-    button.danger { background: #fff; color: #8d1d1a; border-color: #8d1d1a; }
-    .panel { background: #fff; border: 1px solid #d5dde6; border-radius: 12px; padding: 16px; margin-top: 16px; }
-    .choice { display: grid; gap: 12px; margin: 12px 0; }
-    .choice a, .home-link { display: block; background: #fff; border: 1px solid #d5dde6; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit; }
-    .choice a strong, .home-link strong { display: block; font-size: 1.1rem; margin-bottom: 4px; }
+    .navbar { position: fixed; inset: 0 auto 0 0; width: var(--nav-width); background: #f4f5f7; border-right: 1px solid #e4e6e8; display: flex; flex-direction: column; z-index: 20; }
+    .navbar-header { height: 64px; display: flex; align-items: center; gap: 8px; padding: 0 16px; flex: none; }
+    .brand { display: flex; align-items: center; gap: 8px; text-decoration: none; color: #8090a0; min-width: 0; }
+    .brand:hover { color: #8090a0; }
+    .logo { flex: none; }
+    .brand-name { font-size: 22px; font-weight: 600; letter-spacing: -.03em; line-height: 1; }
+    .menu-toggle { display: none; }
+    .menu { display: flex; flex-direction: column; padding: 2px 0 8px; overflow: auto; flex: 1; }
+    .menu a, .navbar-foot a { display: flex; align-items: center; gap: 12px; min-height: 36px; padding: 0 14px 0 16px; color: #262626; text-decoration: none; font-size: 14px; }
+    .menu a:hover, .navbar-foot a:hover { background: #ececed; color: #262626; }
+    .menu a[aria-current="page"] { background: #dee1e7; }
+    .nav-icon { width: 16px; height: 16px; flex: none; }
+    .tab-divider { margin: 16px 16px 4px; font-size: 12px; font-weight: 500; color: #9aa0a6; }
+    .navbar-foot { border-top: 1px solid #e6e8eb; padding: 4px 0 6px; flex: none; }
+    button.minimizer, button.menu-toggle { width: 100%; min-height: 36px; border: 0; border-radius: 0; background: transparent; color: #5c5c5c; display: flex; align-items: center; padding: 0 16px; cursor: pointer; }
+    button.minimizer:hover, button.menu-toggle:hover { background: #ececed; border: 0; color: #5c5c5c; }
+    .minimizer svg, .menu-toggle svg { width: 14px; height: 14px; }
+    .content { margin-left: var(--nav-width); min-height: 100vh; }
+    .topbar { display: none; }
+    main { padding: 8px 16px 56px; }
+    .page-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; margin: 0 0 6px; }
+    .page-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+    h1:focus { outline: none; }
+    h2 { font-size: 16px; font-weight: 600; margin: 0; }
+    .lead { color: #6a6a6a; margin: 0 0 14px; }
+    .step { margin: 0; color: #969696; font-size: 12px; font-weight: 500; }
+    .header-buttons, .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .actions { margin-top: 14px; }
+    .page-header .actions, .header-buttons { margin-top: 0; }
+    button, .btn { font: inherit; font-weight: 500; font-size: 13px; min-height: 30px; border-radius: 4px; padding: 0 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; border: 1px solid #5589ca; background: #5589ca; color: #fff; }
+    button:hover, .btn:hover { background: #386fb4; border-color: #386fb4; color: #fff; }
+    button:disabled { opacity: .6; cursor: default; }
+    button.secondary, a.secondary { background: #fcfcfc; color: #585858; border-color: #c2cacc; }
+    button.secondary:hover, a.secondary:hover { background: #f4f4f4; border-color: #bac3c5; color: #585858; }
+    button.danger { background: #fcfcfc; color: #c44b66; border-color: #e3b7c2; }
+    button.danger:hover { background: #fdf4f6; color: #c44b66; }
+    #conferma-si { background: #d7657d; border-color: #d7657d; color: #fff; }
+    #conferma-si:hover { background: #cc3d5b; border-color: #cc3d5b; color: #fff; }
+    .badge { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 3px; font-size: 12px; font-weight: 600; background: #eaeaea; color: #6a6a6a; white-space: nowrap; }
+    .badge.ok { background: #cceed9; color: #246e43; }
+    .badge.warn { background: #f9eabb; color: #9f7122; }
+    .panel, .dashlet { background: #fff; border: 1px solid #e7eaed; border-radius: 4px; padding: 14px 16px; }
+    .panel { margin-top: 12px; }
+    .dashlets { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 8px; }
+    .dashlet { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: inherit; margin: 0; }
+    .dashlet:hover { border-color: #d5d8dc; color: inherit; }
+    .dashlet-title { font-size: 15px; font-weight: 600; }
+    .dashlet-count { font-size: 28px; font-weight: 600; line-height: 1.15; margin-top: 6px; }
+    .dashlet .hint { margin-top: 4px; }
     form { display: grid; gap: 14px; }
-    label, .field { display: grid; gap: 6px; font-weight: 600; }
-    .hint { font-weight: 400; color: #243140; }
-    input, select, textarea { font: inherit; font-weight: 400; padding: 10px 12px; border-radius: 8px; border: 1px solid #6b7c90; background: #fff; width: 100%; }
-    textarea { min-height: 96px; }
-    fieldset { border: 1px solid #d5dde6; border-radius: 10px; margin: 0; padding: 12px; display: grid; gap: 10px; }
-    legend { font-weight: 700; padding: 0 4px; }
-    .radios label { font-weight: 400; display: flex; gap: 10px; align-items: flex-start; }
-    .radios input { width: auto; margin-top: 4px; }
-    .error { color: #8d1d1a; font-weight: 700; }
-    .ok { color: #0d5c32; font-weight: 700; }
-    dl { display: grid; grid-template-columns: 11rem 1fr; gap: 6px 12px; margin: 8px 0 0; }
-    dt { font-weight: 700; }
+    form.panel { margin-top: 8px; }
+    label, .field { display: grid; gap: 4px; font-weight: 600; font-size: 13px; }
+    .hint { font-weight: 400; color: #6a6a6a; font-size: 13px; }
+    input, select, textarea { font: inherit; font-weight: 400; font-size: 14px; min-height: 32px; padding: 4px 10px; border-radius: 3px; border: 1px solid #d1d5d6; background: #fefefe; color: #262626; width: 100%; }
+    textarea { min-height: 96px; padding: 8px 10px; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #66afe9; box-shadow: 0 0 0 3px rgba(102, 175, 233, .25); }
+    fieldset { border: 1px solid #e7eaed; border-radius: 4px; margin: 0; padding: 12px; display: grid; gap: 8px; }
+    legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
+    .radios label { font-weight: 400; font-size: 14px; display: flex; gap: 8px; align-items: flex-start; }
+    .radios input { width: auto; margin-top: 3px; }
+    .error { color: #ad4846; font-weight: 600; margin: 0; }
+    dl { display: grid; grid-template-columns: 11rem 1fr; gap: 6px 12px; margin: 10px 0 0; }
+    dt { font-weight: 600; color: #6a6a6a; }
     dd { margin: 0; }
+    .table-wrap { padding: 0; overflow: auto; }
     table { width: 100%; border-collapse: collapse; background: #fff; }
-    caption { text-align: left; font-weight: 700; margin-bottom: 8px; }
-    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #d5dde6; vertical-align: top; }
-    code { word-break: break-all; }
-    dialog { border: 2px solid #16324f; border-radius: 12px; padding: 20px; max-width: 28rem; }
-    dialog::backdrop { background: rgba(16, 24, 32, .55); }
-    .step { font-weight: 700; margin-bottom: 0; }
-    @media (max-width: 640px) { dl { grid-template-columns: 1fr; } }
+    caption { text-align: left; font-weight: 600; padding: 12px 14px 0; }
+    th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid #eef0f2; vertical-align: top; font-size: 13px; }
+    th { font-weight: 600; background: #fafbfc; color: #262626; }
+    code { word-break: break-all; font-size: 12px; background: #f7f8f9; border: 1px solid #e7eaed; border-radius: 3px; padding: 1px 4px; }
+    dialog { border: 1px solid #e7eaed; border-radius: 4px; padding: 0; max-width: 28rem; width: calc(100% - 32px); box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+    dialog::backdrop { background: rgba(38, 38, 38, .35); }
+    dialog h2 { margin: 0; padding: 14px 16px; background: #f1f3f5; font-size: 16px; border-bottom: 1px solid #e7eaed; }
+    dialog p { margin: 0; padding: 16px; }
+    dialog .actions { margin: 0; padding: 12px 16px; background: #f1f3f5; border-top: 1px solid #e7eaed; justify-content: flex-end; }
+    summary { cursor: pointer; font-weight: 600; }
+    body.nav-min { --nav-width: var(--nav-min); }
+    body.nav-min .brand-name, body.nav-min .nav-label, body.nav-min .tab-divider { display: none; }
+    body.nav-min .navbar-header { justify-content: center; padding: 0; }
+    body.nav-min .menu a, body.nav-min .navbar-foot a { justify-content: center; padding: 0; gap: 0; }
+    body.nav-min .minimizer { justify-content: center; padding: 0; }
+    body.nav-min .minimizer svg { transform: rotate(180deg); }
+    @media (max-width: 760px) {
+      .navbar { transform: translateX(-100%); transition: transform .16s ease; }
+      body.nav-open .navbar { transform: none; box-shadow: 8px 0 24px rgba(0, 0, 0, .08); }
+      .content { margin-left: 0; }
+      .topbar { display: flex; align-items: center; height: 44px; padding: 0 8px; }
+      button.menu-toggle { display: inline-flex; width: 32px; min-height: 32px; padding: 0; justify-content: center; }
+      dl { grid-template-columns: 1fr; }
+      .page-header { align-items: flex-start; flex-direction: column; }
+    }
   </style>
 </head>
 <body>
   <a class="skip" href="#contenuto">Vai al contenuto</a>
-  <header class="top">
-    <p class="brand">Nesso</p>
-    <nav aria-label="Sezioni">
-      <a href="#/" data-nav="/">Inizio</a>
-      <a href="#/collegamenti" data-nav="/collegamenti">Collegamenti</a>
-      <a href="#/integrazioni" data-nav="/integrazioni">Integrazioni</a>
-      <a href="#/attivita" data-nav="/attivita">Attività</a>
-      <a id="espo" href="http://localhost:8088" target="_blank" rel="noopener">Apri Espo</a>
+  <aside class="navbar" id="navbar">
+    <div class="navbar-header">
+      <a class="brand" href="#/">
+        <svg class="logo" viewBox="0 0 26 26" width="26" height="26" aria-hidden="true">
+          <rect x="1" y="1" width="11" height="11" rx="2" fill="#8b939c"/>
+          <rect x="14" y="1" width="11" height="11" rx="2" fill="#e4a133"/>
+          <rect x="1" y="14" width="11" height="11" rx="2" fill="#5589ca"/>
+          <rect x="14" y="14" width="11" height="11" rx="2" fill="#58c97a"/>
+        </svg>
+        <span class="brand-name">Nesso</span>
+      </a>
+    </div>
+    <nav class="menu" aria-label="Sezioni">
+      <a href="#/" data-nav="/">
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#8b939c" d="M1 1h6v6H1V1zm8 0h6v6H9V1zM1 9h6v6H1V9zm8 0h6v6H9V9z"/></svg>
+        <span class="nav-label">Inizio</span>
+      </a>
+      <div class="tab-divider">Integrazione</div>
+      <a href="#/collegamenti" data-nav="/collegamenti">
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#3a7fc1" d="M6.3 9.7a3.2 3.2 0 0 1 0-4.5l1.8-1.8a3.2 3.2 0 0 1 4.5 4.5L11.4 9l-1.1-1.1 1.2-1.2a1.6 1.6 0 0 0-2.3-2.3L7.4 6.2a1.6 1.6 0 0 0 0 2.3l.4.4-1.1 1.1-.4-.3zm3.4-3.4a3.2 3.2 0 0 1 0 4.5l-1.8 1.8a3.2 3.2 0 0 1-4.5-4.5L4.6 7l1.1 1.1-1.2 1.2a1.6 1.6 0 0 0 2.3 2.3l1.8-1.8a1.6 1.6 0 0 0 0-2.3l-.4-.4 1.1-1.1.4.3z"/></svg>
+        <span class="nav-label">Collegamenti</span>
+      </a>
+      <a href="#/integrazioni" data-nav="/integrazioni">
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#2f9e8f" d="M1.5 4h9.1l-1.8-1.8 1.1-1.1L14 5.2l-4.1 4.1-1.1-1.1L10.6 6.4H1.5V4zm13 6.4H5.4l1.8 1.8-1.1 1.1L2 9.2l4.1-4.1 1.1 1.1-1.8 1.8h9.1v1.6z"/></svg>
+        <span class="nav-label">Integrazioni</span>
+      </a>
+      <a href="#/attivita" data-nav="/attivita">
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#6b7280" d="M2 3h2v2H2V3zm4 0h8v2H6V3zM2 7h2v2H2V7zm4 0h8v2H6V7zM2 11h2v2H2v-2zm4 0h8v2H6v-2z"/></svg>
+        <span class="nav-label">Attività</span>
+      </a>
     </nav>
-  </header>
-  <main id="contenuto" tabindex="-1"></main>
+    <div class="navbar-foot">
+      <a id="espo" href="http://localhost:8088" target="_blank" rel="noopener">
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#5589ca" d="M3 2h6.2L13 5.8V14H3V2zm6 1.2V6h2.8L9 3.2zM4.5 8h7v1.2h-7V8zm0 2.4h7V12h-7v-1.6z"/></svg>
+        <span class="nav-label">EspoCRM</span>
+      </a>
+      <button type="button" class="minimizer" id="nav-min" aria-label="Riduci il menu">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M10.2 2.4 4.6 8l5.6 5.6-1.1 1.1L2.4 8l6.7-6.7 1.1 1.1z"/></svg>
+      </button>
+    </div>
+  </aside>
+  <div class="content">
+    <header class="topbar">
+      <button type="button" class="menu-toggle" id="menu-toggle" aria-label="Apri il menu">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 3h14v1.6H1V3zm0 4.2h14v1.6H1V7.2zM1 11.4h14V13H1v-1.6z"/></svg>
+      </button>
+    </header>
+    <main id="contenuto" tabindex="-1"></main>
+  </div>
   <p id="annuncio" class="sr" aria-live="polite"></p>
   <dialog id="conferma">
     <h2 id="conferma-titolo">Conferma</h2>
@@ -103,7 +196,12 @@
     function connectionOf(id) { return (state.connections || []).find(item => item.id === id); }
     function fieldChoices(entityName, linksToo) {
       const entity = entityOf(entityName);
-      return (entity ? entity.fields : []).filter(field => linksToo || field.type !== "link");
+      const structural = new Set(["link", "linkMultiple", "linkParent"]);
+      return (entity ? entity.fields : []).filter(field => linksToo || !structural.has(field.type));
+    }
+    function multiLinks(entityName, foreign) {
+      const entity = entityOf(entityName);
+      return (entity ? entity.fields : []).filter(field => field.type === "linkMultiple" && (!foreign || field.foreignEntity === foreign));
     }
     function options(items, valueKey, labelKey, selected) {
       return items.map(item => `<option value="${esc(item[valueKey])}" ${item[valueKey] === selected ? "selected" : ""}>${esc(item[labelKey])}</option>`).join("");
@@ -118,6 +216,7 @@
         if (on) link.setAttribute("aria-current", "page");
         else link.removeAttribute("aria-current");
       });
+      document.body.classList.remove("nav-open");
       const heading = main.querySelector("h1");
       if (heading && lastPath && here !== lastPath) {
         heading.tabIndex = -1;
@@ -130,27 +229,32 @@
       const connections = state.connections || [];
       const pipelines = state.pipelines || [];
       const espoText = health.espo === "raggiungibile" ? "Espo risponde." : "Espo non risponde ancora. Attendi il primo avvio e ricarica.";
+      const badge = health.espo === "raggiungibile" ? `<span class="badge ok">Espo risponde</span>` : `<span class="badge warn">Espo non risponde</span>`;
       shell("Inizio", `
-        <h1>Inizio</h1>
-        <p class="lead">Prima colleghi il sistema esterno. Poi scegli quale scheda di Espo riceve o manda i dati.</p>
-        <p>${esc(espoText)}</p>
-        <div class="choice">
-          <a href="#/collegamenti">
-            <strong>Collegamenti (${connections.length})</strong>
-            <span>Webhook, database, file CSV o destinazione HTTP.</span>
-          </a>
-          <a href="#/integrazioni">
-            <strong>Integrazioni (${pipelines.length})</strong>
-            <span>Quale scheda, quali campi, ogni quanto.</span>
-          </a>
-          <a href="#/attivita">
-            <strong>Attività</strong>
-            <span>Che cosa è entrato e che cosa è uscito.</span>
-          </a>
+        <div class="page-header">
+          <div class="page-title"><h1>Inizio</h1>${badge}</div>
+          <div class="header-buttons">
+            ${connections.length ? `<a class="btn" href="#/integrazioni/nuova/1">Nuova integrazione</a>` : `<a class="btn" href="#/collegamenti/nuovo">Nuovo collegamento</a>`}
+            <a class="btn secondary" href="${esc(espoUrl)}" target="_blank" rel="noopener">Apri Espo</a>
+          </div>
         </div>
-        <div class="actions">
-          ${connections.length ? `<a class="btn" href="#/integrazioni/nuova/1">Nuova integrazione</a>` : `<a class="btn" href="#/collegamenti/nuovo">Crea il primo collegamento</a>`}
-          <a class="btn secondary" href="${esc(espoUrl)}" target="_blank" rel="noopener">Apri Espo</a>
+        <p class="lead">${health.espo === "raggiungibile" ? "" : esc(espoText) + " "}Prima colleghi il sistema esterno. Poi scegli quale scheda di Espo riceve o manda i dati.</p>
+        <div class="dashlets">
+          <a class="dashlet" href="#/collegamenti">
+            <span class="dashlet-title">Collegamenti</span>
+            <strong class="dashlet-count">${connections.length}</strong>
+            <span class="hint">Webhook, database, file CSV o destinazione HTTP.</span>
+          </a>
+          <a class="dashlet" href="#/integrazioni">
+            <span class="dashlet-title">Integrazioni</span>
+            <strong class="dashlet-count">${pipelines.length}</strong>
+            <span class="hint">Quale scheda, quali campi, ogni quanto.</span>
+          </a>
+          <a class="dashlet" href="#/attivita">
+            <span class="dashlet-title">Attività</span>
+            <strong class="dashlet-count">${(state.queue || []).length + (state.deliveries || []).length}</strong>
+            <span class="hint">Che cosa è entrato e che cosa è uscito.</span>
+          </a>
         </div>
         <details class="panel">
           <summary>Accesso all'Espo di questa prova</summary>
@@ -175,9 +279,11 @@
     function connectionsPage() {
       const items = state.connections || [];
       shell("Collegamenti", `
-        <h1>Collegamenti</h1>
+        <div class="page-header">
+          <h1>Collegamenti</h1>
+          <div class="header-buttons"><a class="btn" href="#/collegamenti/nuovo">Nuovo collegamento</a></div>
+        </div>
         <p class="lead">Un collegamento è il canale verso il sistema esterno. Non dice ancora quali campi vanno su Espo.</p>
-        <div class="actions"><a class="btn" href="#/collegamenti/nuovo">Nuovo collegamento</a></div>
         ${items.map(connectionCard).join("") || `<p class="panel">Nessun collegamento. Il primo passo è crearne uno.</p>`}
       `);
       bindDelete();
@@ -185,9 +291,9 @@
 
     function connectionFormPage() {
       shell("Nuovo collegamento", `
-        <h1>Nuovo collegamento</h1>
+        <div class="page-header"><h1>Nuovo collegamento</h1></div>
         <p class="lead">Scegli un solo tipo. I campi sotto cambiano in base a quella scelta.</p>
-        <form id="connection-form">
+        <form id="connection-form" class="panel">
           <label>Nome del collegamento
             <input name="name" required autocomplete="off">
             <span class="hint">Un nome che riconosci, per esempio «Ordini del magazzino».</span>
@@ -254,9 +360,11 @@
     function integrationsPage() {
       const items = state.pipelines || [];
       shell("Integrazioni", `
-        <h1>Integrazioni</h1>
+        <div class="page-header">
+          <h1>Integrazioni</h1>
+          <div class="header-buttons"><a class="btn" href="#/integrazioni/nuova/1">Nuova integrazione</a></div>
+        </div>
         <p class="lead">Un'integrazione lega un collegamento a una scheda di Espo.</p>
-        <div class="actions"><a class="btn" href="#/integrazioni/nuova/1">Nuova integrazione</a></div>
         ${items.map(item => {
           const link = connectionOf(item.connection_id);
           const entity = entityOf(item.espo_entity);
@@ -309,9 +417,10 @@
       if (![1, 2, 3, 4].includes(stepNumber)) { location.hash = "#/integrazioni/nuova/1"; return; }
       const titles = ["Nome e collegamento", "Scheda di Espo", "Abbinamento", "Quando eseguirla"];
       shell("Nuova integrazione, passo " + stepNumber, `
-        <p class="step">Passo ${stepNumber} di 4</p>
-        <h1>${titles[stepNumber - 1]}</h1>
-        <form id="wizard" novalidate>
+        <div class="page-header">
+          <div class="page-title"><div><p class="step">Passo ${stepNumber} di 4</p><h1>${titles[stepNumber - 1]}</h1></div></div>
+        </div>
+        <form id="wizard" class="panel" novalidate>
           ${step === 1 ? stepConnection() : step === 2 ? stepEntity() : step === 3 ? stepMap() : stepReview()}
           <p id="form-error" class="error" role="alert"></p>
           <div class="actions">
@@ -402,22 +511,33 @@
           <button type="button" class="secondary remove">Togli questo abbinamento</button>
         </fieldset>`;
       }
+      const role = row.role || "field";
       const fieldBlock = draft.entityMode === "new"
         ? `<label>Nome del campo nuovo <input class="field-label" value="${esc(row.to)}" autocomplete="off"></label>`
         : `<label>Campo di Espo <select class="espo">${options(fieldChoices(draft.espoEntity, false), "name", "label", row.to)}</select></label>`;
       const foreign = catalog.filter(item => item.name !== draft.espoEntity);
+      const foreignName = row.lookupEntity || (foreign[0] && foreign[0].name);
+      const multi = multiLinks(draft.espoEntity, row.lookupEntity);
       return `<fieldset data-row>
         <legend>Abbinamento ${index + 1}</legend>
         <label>Colonna del sistema esterno <input class="ext" value="${esc(row.from)}" autocomplete="off"></label>
         <fieldset class="radios">
           <legend>Che cosa ne facciamo</legend>
-          <label><input type="radio" class="role" name="role-${index}" value="field" ${row.role !== "link" ? "checked" : ""}> Lo scriviamo in un campo</label>
-          <label><input type="radio" class="role" name="role-${index}" value="link" ${row.role === "link" ? "checked" : ""}> Lo usiamo per collegare un'altra scheda</label>
+          <label><input type="radio" class="role" name="role-${index}" value="field" ${role === "field" ? "checked" : ""}> Lo scriviamo in un campo</label>
+          <label><input type="radio" class="role" name="role-${index}" value="link" ${role === "link" ? "checked" : ""}> Colleghiamo una scheda</label>
+          <label><input type="radio" class="role" name="role-${index}" value="links" ${role === "links" ? "checked" : ""}> Colleghiamo più record</label>
+          <label><input type="radio" class="role" name="role-${index}" value="parent" ${role === "parent" ? "checked" : ""}> È un'attività appesa a una scheda</label>
         </fieldset>
-        <div class="as-field" ${row.role === "link" ? "hidden" : ""}>${fieldBlock}</div>
-        <div class="as-link" ${row.role === "link" ? "" : "hidden"}>
+        <div class="as-field" ${role === "field" ? "" : "hidden"}>${fieldBlock}</div>
+        <div class="as-link" ${role === "link" || role === "parent" ? "" : "hidden"}>
           <label>Scheda da collegare <select class="foreign">${options(foreign, "name", "label", row.lookupEntity)}</select></label>
-          <label>Campo con cui riconosciamo il record <select class="lookupBy">${options(fieldChoices(row.lookupEntity || (foreign[0] && foreign[0].name), false), "name", "label", row.lookupBy)}</select></label>
+          <label>Campo con cui riconosciamo il record <select class="lookupBy">${options(fieldChoices(foreignName, false), "name", "label", row.lookupBy)}</select></label>
+        </div>
+        <div class="as-links" ${role === "links" ? "" : "hidden"}>
+          <label>Scheda da collegare <select class="foreign">${options(foreign, "name", "label", row.lookupEntity)}</select></label>
+          <label>Collegamento sulla scheda <select class="multi">${options(multi, "name", "label", row.to)}</select></label>
+          <label>Campo con cui riconosciamo ogni record <select class="lookupBy">${options(fieldChoices(foreignName, false), "name", "label", row.lookupBy)}</select></label>
+          <span class="hint">Nella cella possono esserci più valori, separati da virgola.</span>
         </div>
         <button type="button" class="secondary remove">Togli questo abbinamento</button>
       </fieldset>`;
@@ -434,8 +554,7 @@
         form.querySelectorAll("[data-row]").forEach(row => {
           const role = row.querySelector(".role");
           if (role) row.querySelectorAll(".role").forEach(input => input.addEventListener("change", () => paint(false)));
-          const foreign = row.querySelector(".foreign");
-          if (foreign) foreign.addEventListener("change", () => paint(false));
+          row.querySelectorAll(".foreign").forEach(foreign => foreign.addEventListener("change", () => paint(false)));
           const remove = row.querySelector(".remove");
           remove.addEventListener("click", () => {
             readStep(3);
@@ -514,12 +633,19 @@
           if (outbound) return { from: row.querySelector(".espo").value, role: "field", to: ext.value.trim(), lookupEntity: "", lookupBy: "" };
           const typed = row.querySelector(".field-label");
           const chosen = row.querySelector(".espo");
+          const box = role === "links" ? row.querySelector(".as-links") : row.querySelector(".as-link");
+          const foreignSelect = box ? box.querySelector(".foreign") : null;
+          const lookupSelect = box ? box.querySelector(".lookupBy") : null;
+          const multi = row.querySelector(".as-links .multi");
+          let to = typed ? typed.value.trim() : (chosen ? chosen.value : "");
+          if (role === "link" || role === "parent") to = foreignSelect ? foreignSelect.value : "";
+          if (role === "links") to = multi ? multi.value : "";
           return {
             from: ext.value.trim(),
             role,
-            to: role === "link" ? (row.querySelector(".foreign") || {}).value || "" : (typed ? typed.value.trim() : (chosen ? chosen.value : "")),
-            lookupEntity: role === "link" ? row.querySelector(".foreign").value : "",
-            lookupBy: role === "link" ? row.querySelector(".lookupBy").value : ""
+            to,
+            lookupEntity: foreignSelect ? foreignSelect.value : "",
+            lookupBy: lookupSelect ? lookupSelect.value : ""
           };
         });
         if (!outbound && !draft.externalIdField) return "Indica la colonna che identifica il record.";
@@ -533,7 +659,8 @@
       const outbound = selectedKind() === "http";
       const mapping = draft.rows.filter(row => row.from && row.to).map(row => {
         if (outbound) return { from: row.from, to: row.to, role: "field" };
-        if (row.role === "link") return { from: row.from, to: row.lookupEntity, role: "link", lookupEntity: row.lookupEntity, lookupBy: row.lookupBy };
+        if (row.role === "link" || row.role === "parent") return { from: row.from, to: row.lookupEntity, role: row.role, lookupEntity: row.lookupEntity, lookupBy: row.lookupBy };
+        if (row.role === "links") return { from: row.from, to: row.to, role: "links", lookupEntity: row.lookupEntity, lookupBy: row.lookupBy };
         return { from: row.from, to: row.to, role: "field" };
       });
       const body = {
@@ -565,18 +692,20 @@
       const outbound = (state.deliveries || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.connection_id || "")}</td><td>Uscita</td><td>${esc(phrases[item.status] || item.status)}${item.detail ? " — " + esc(item.detail) : ""}</td><td>${esc(item.created_at)}</td></tr>`);
       const rows = inbound.concat(outbound).join("") || `<tr><td colspan="4">Ancora nessun passaggio.</td></tr>`;
       shell("Attività", `
-        <h1>Attività</h1>
+        <div class="page-header"><h1>Attività</h1></div>
         <p class="lead">Gli ultimi ingressi in Espo e le ultime uscite verso un sistema esterno.</p>
-        <table>
-          <caption>Ultimi passaggi</caption>
-          <thead><tr><th scope="col">Integrazione</th><th scope="col">Record</th><th scope="col">Esito</th><th scope="col">Quando</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <div class="panel table-wrap">
+          <table>
+            <caption>Ultimi passaggi</caption>
+            <thead><tr><th scope="col">Integrazione</th><th scope="col">Record</th><th scope="col">Esito</th><th scope="col">Quando</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
       `);
     }
 
     function notFound() {
-      shell("Pagina non trovata", `<h1>Pagina non trovata</h1><p><a href="#/">Torna all'inizio</a></p>`);
+      shell("Pagina non trovata", `<div class="page-header"><h1>Pagina non trovata</h1></div><p><a href="#/">Torna all'inizio</a></p>`);
     }
 
     function bindDelete() {
@@ -597,6 +726,12 @@
       });
     }
     document.querySelector("#conferma-no").addEventListener("click", () => dialog.close());
+    document.querySelector("#nav-min").addEventListener("click", () => {
+      document.body.classList.toggle("nav-min");
+      localStorage.setItem("nesso-nav", document.body.classList.contains("nav-min") ? "min" : "full");
+    });
+    document.querySelector("#menu-toggle").addEventListener("click", () => document.body.classList.toggle("nav-open"));
+    if (localStorage.getItem("nesso-nav") === "min") document.body.classList.add("nav-min");
 
     function render() {
       const path = pathOf();
