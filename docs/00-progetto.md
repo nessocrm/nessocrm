@@ -6,7 +6,7 @@ Repository: https://github.com/nessocrm/nessocrm. Dominio, tutto attaccato: `nes
 
 Lo stack di prova è il compose `nessocrm`, in questa cartella. Espo di prova: http://localhost:8088. Nesso: http://localhost:8091.
 
-Questo documento dice che cosa è già fatto e che cosa manca. Il comportamento della prima versione è nel [manuale](README.md). La fotografia del backup di produzione resta fuori da questo repo. Non è il backlog di Nesso.
+Questo documento dice che cosa è già fatto e che cosa manca. Il comportamento della prima versione è nel [manuale](index.md). La fotografia del backup di produzione resta fuori da questo repo. Non è il backlog di Nesso.
 
 ## Prima versione, 17 ottobre 2026
 
@@ -33,11 +33,11 @@ L'identità di un record in ingresso è `{id integrazione}:{valore esterno}`. Su
 
 L'uscita ricorda l'ultimo `modifiedAt` e al giro dopo manda solo i record successivi, al massimo 50.
 
-La cadenza è manuale, 5 minuti, 15 minuti o un'ora. L'interfaccia è a schermate: Inizio, Collegamenti, Integrazioni, Attività. La creazione di un'integrazione è in quattro passi.
+La cadenza è manuale, 5 minuti, 15 minuti o un'ora. L'interfaccia ha il menu laterale di Espo: Inizio, Collegamenti, Integrazioni, Attività, e la voce EspoCRM. La creazione di un'integrazione è in quattro passi. Nell'abbinamento si scrive un campo, si collega una scheda, si collegano più record, oppure si appende un'attività a una scheda.
 
 Ogni chiamata verso Espo usa le API HTTP, header `Espo-Authorization`. Creare una scheda, creare un campo, creare un lookup, leggere e scrivere un record: sono tutte API. Nesso non esegue SQL sulle tabelle di Espo.
 
-L'istanza locale è l'immagine pubblica `espocrm/espocrm:10.0`, installata vuota. Non è il backup. Il backup di produzione è Espo 10.0.8 con l'Advanced Pack in `client/custom/modules/advanced/`. Quel pacchetto non è nell'immagine pubblica, e non è stato copiato nella prova.
+L'istanza locale è l'immagine pubblica `espocrm/espocrm:10.0`, installata vuota. Non è il backup. Il backup di produzione è Espo 10.0.8 con l'Advanced Pack. Quel pacchetto non è nell'immagine pubblica. Sulla prova il compose lo monta da `local/advanced-pack/`, cartella ignorata da git.
 
 ### Difetti noti di questa versione
 
@@ -74,8 +74,7 @@ Da prevedere insieme: credenziali separate da quelle di Espo, prova di invio dal
 - Una schermata Entità, fuori dal percorso dell'integrazione: creare, rivedere e aggiungere campi senza dover rifare i quattro passi.
 - Tipi oltre il testo: numero, data, data e ora, sì/no, elenco, valuta, email, telefono, url.
 - Valori di un elenco: la colonna esterna «aperto» diventa il valore che Espo si aspetta.
-- Lookup uno-a-molti e molti-a-molti, oltre al many-to-one già presente.
-- Più lookup verso la stessa scheda, con un nome scelto da chi configura.
+- Più lookup verso la stessa scheda, con un nome scelto da chi configura. Il collegamento di più record e l'attività appesa a una scheda ci sono già nel passo di abbinamento.
 - Campi obbligatori di Espo dichiarati prima del salvataggio, così il giro non fallisce a metà.
 - Modificare una scheda già creata: aggiungere un campo, cambiare un'etichetta.
 
@@ -104,7 +103,7 @@ Da prevedere insieme: credenziali separate da quelle di Espo, prova di invio dal
 - Giornale degli scarti, riga per riga, visibile in Attività. Oggi lo scarto del database sta solo nel dettaglio dell'ultimo giro.
 - Ripetizione del giro con backoff, e uno scarto che non blocca l'intervallo successivo.
 - Test automatici sui quattro canali, sulla creazione scheda e sul lookup.
-- Advanced Pack sull'istanza locale. I file del modulo stanno in `local/advanced-pack/`, fuori da git. L'immagine pubblica non lo contiene. I dati di produzione restano fuori.
+- Pubblicare l'Advanced Pack. Sulla prova locale il compose lo monta già da `local/advanced-pack/`, fuori da git. L'immagine pubblica non lo contiene. I dati di produzione restano fuori.
 
 ### Quello che resta documentazione del backup
 

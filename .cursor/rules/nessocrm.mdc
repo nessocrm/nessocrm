@@ -10,3 +10,5 @@ Lavorare solo in questa cartella. Remoto: https://github.com/nessocrm/nessocrm.
 Non modificare, spostare o committare `C:\Users\ndoni\Documents\bitbuket\2026-10-14-backup-espocrm-produzione`.
 
 Non importare i dump di produzione. Espo di prova resta vuoto. L'Advanced Pack, se presente, sta solo in `local/advanced-pack/` e non si committa. Le scritture verso Espo passano dalle API HTTP.
+
+Ogni modifica al prodotto, alla demo, alle API, all'interfaccia o al marchio aggiorna i docs nello stesso cambio. Si aggiorna il capitolo esistente, oppure se ne aggiunge uno e lo si inserisce in `mkdocs.yml` e in `docs/index.md`. I docs restano in italiano e `py -3 -m mkdocs build --strict` deve passare. Il fatto e il non fatto restano in `docs/00-progetto.md`.

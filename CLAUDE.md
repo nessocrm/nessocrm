@@ -4,7 +4,7 @@ Claude Code (VS Code extension, terminal, or desktop) can use **vibeissue** like
 
 ## What to read
 
-1. **[AGENTS.md](AGENTS.md)** — canonical rules (commands, labels, workflow)
+1. **[AGENTS.md](AGENTS.md)** — canonical rules (commands, labels, workflow, documentation). Every product change updates `docs/` in the same change. The site is MkDocs: `py -3 -m mkdocs build --strict` must pass.
 2. **[Documentation](https://vibeissue.github.io/docs/)** — MkDocs (EN/IT), including [platforms](https://vibeissue.github.io/docs/platforms/overview/)
 
 ## Claude Code setup

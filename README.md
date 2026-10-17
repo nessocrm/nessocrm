@@ -7,7 +7,7 @@ Repository: https://github.com/nessocrm/nessocrm
 | Cosa | Dove |
 |---|---|
 | Fatto e mancante | [docs/00-progetto.md](docs/00-progetto.md) |
-| Manuale | [docs/README.md](docs/README.md) |
+| Manuale | [docs/index.md](docs/index.md) |
 | Espo di prova | http://localhost:8088 (`admin` / `locale-admin`) |
 | Applicazione | http://localhost:8091 |
 

@@ -4,7 +4,7 @@ Il progetto si chiama Nesso. L'applicazione sta in questa cartella: è il legame
 
 Che cosa è già fatto e che cosa manca, posta del motore compresa: [docs/00-progetto.md](docs/00-progetto.md).
 
-Il manuale è in [docs/README.md](docs/README.md). Undici capitoli: prodotto, architettura, tabelle, ingresso, uscita, i quattro canali, catalogo Espo, API, pagina, stato reale della prova, esercizio.
+Il manuale è in [docs/index.md](docs/index.md). Si pubblica con MkDocs: `py -3 -m mkdocs serve`.
 
 | Per fare | Apri |
 |---|---|

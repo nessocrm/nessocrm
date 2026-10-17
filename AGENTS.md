@@ -12,6 +12,16 @@ Il backup di produzione è un'altra cartella: `C:\Users\ndoni\Documents\bitbuket
 - `analisi/` e `evoluzione/` del backup descrivono quel sistema. Non sono il backlog di Nesso. Il backlog è `docs/00-progetto.md`.
 - Non committare segreti, database SQLite, né i CSV in `scambio/`.
 
+## Documentazione
+
+Ogni modifica al prodotto, alla demo, alle API, all'interfaccia o al marchio aggiorna i docs nello stesso cambio.
+
+- Si aggiorna il capitolo che descrive già quel comportamento.
+- Se il comportamento è nuovo, si aggiunge un capitolo in `docs/`, lo si mette nella chiave `nav` di `mkdocs.yml` e nella tabella di `docs/index.md`.
+- I docs restano in italiano, in Markdown, e il build `py -3 -m mkdocs build --strict` deve passare. Niente link che escono da `docs/`: un file della root si cita per nome, non con un percorso relativo.
+- Il fatto e il non fatto restano in `docs/00-progetto.md`. Una cosa fatta si toglie dall'elenco di ciò che manca.
+- Il marchio sta in `assets/logo`. Se cambia il segno, si rilancia `py -3 scripts/build_logo.py` e si aggiorna `docs/14-marchio.md`.
+
 ## Git
 
 Il commit e il push partono da questa cartella, verso `nessocrm/nessocrm`. Non inizializzare git nel backup.

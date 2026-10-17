@@ -21,7 +21,7 @@ Tutto quello che l'utente crea è uno di questi due oggetti.
 
 **Integrazione.** La regola appesa a un collegamento.
 
-- quale scheda di Espo (Lead, Account, Contact, Opportunity, o una scheda custom comparsa nel metadata)
+- quale scheda di Espo (Lead, Account, Contact, oppure una scheda custom comparsa nel metadata)
 - quale colonna del sistema esterno è l'identità del record
 - quale campo esterno finisce in quale campo Espo
 - ogni quanto ripetere: a mano, ogni 5 minuti, ogni 15, ogni ora

@@ -1,0 +1,61 @@
+site_name: Nesso
+site_description: Manuale di Nesso, il legame fra EspoCRM e un sistema esterno.
+repo_url: https://github.com/nessocrm/nessocrm
+repo_name: nessocrm/nessocrm
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  language: it
+  logo: img/marchio.svg
+  favicon: img/marchio.svg
+  font:
+    text: Inter
+  features:
+    - navigation.expand
+    - search.suggest
+    - content.code.copy
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: custom
+      accent: custom
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - tables
+  - attr_list
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+
+plugins:
+  - search
+
+exclude_docs: |
+  README.md
+
+nav:
+  - Manuale: index.md
+  - Progetto: 00-progetto.md
+  - Prodotto: 01-prodotto.md
+  - Architettura: 02-architettura.md
+  - Modello dati: 03-modello-dati.md
+  - Ingresso in Espo: 04-ingresso-in-espo.md
+  - Uscita da Espo: 05-uscita-da-espo.md
+  - Quattro canali: 06-quattro-canali.md
+  - Catalogo Espo: 07-catalogo-espo.md
+  - API: 08-api.md
+  - Interfaccia: 09-interfaccia.md
+  - Stato della prova: 10-stato-della-prova.md
+  - Esercizio: 11-esercizio.md
+  - Token GitHub: 12-token-github.md
+  - Demo Meridia: 13-demo-meridia.md
+  - Marchio: 14-marchio.md

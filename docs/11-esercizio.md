@@ -2,7 +2,7 @@
 
 ## Accendere
 
-Da `05-evoluzione-integrazione/locale`:
+Dalla root del repository:
 
 ```text
 docker compose up -d --build
@@ -14,7 +14,7 @@ La prima volta scarica `mariadb:11.4`, `espocrm/espocrm:10.0` e costruisce il mo
 |---|---|
 | http://localhost:8088 | pagina di login Espo, italiano |
 | `admin` / `locale-admin` | entra |
-| http://localhost:8091 | pagina Integrazioni |
+| http://localhost:8091 | pagina Inizio |
 | http://localhost:8091/api/health | `espo` raggiungibile, `fields` pronti |
 
 `docker compose ps` deve mostrare `nessocrm-db`, `nessocrm-espo`, `nessocrm-daemon`, `nessocrm-motore`.
@@ -79,3 +79,14 @@ La scelta 8088 e 8091 è di questa macchina. Se una delle due è presa, Compose 
 ## Cosa non fare su questo PC pensando di toccare la produzione
 
 I contenitori si chiamano `nessocrm-*`. I dump in `01-espocrm-database` e `03-dwh-database` non sono argomenti di alcun servizio. Importarli in `nessocrm-db` mescolerebbe i dati veri con la prova. Il manuale non descrive quel comando.
+
+## Manuale
+
+Il sito dei docs si costruisce da questa root.
+
+```text
+py -3 -m pip install -r requirements-docs.txt
+py -3 -m mkdocs serve
+```
+
+Si apre su http://127.0.0.1:8000. Il controllo, senza avviare il server, è `py -3 -m mkdocs build --strict`. La configurazione è `mkdocs.yml`. I capitoli stanno in `docs/` e il menu del sito è la chiave `nav` di quel file.

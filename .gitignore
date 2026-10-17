@@ -8,3 +8,6 @@ scambio/**
 
 # Advanced Pack commerciale: resta su questo PC, non entra nel repository.
 local/advanced-pack/
+
+# Sito MkDocs generato.
+site/

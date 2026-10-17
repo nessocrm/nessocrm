@@ -6,15 +6,24 @@ L'app non ha una lista di schede Enostra. Chiede a Espo che cosa esiste.
 
 `GET /api/v1/Metadata?key=scopes`.
 
-Una voce entra se è un oggetto con `entity` vero, `object` vero, `tab` vero, e senza `disabled`. Schede di sistema senza tab (quelle che Espo usa ma non mostra nel menu) non compaiono. L'etichetta è `Global.scopeNames` di I18n `it_IT`, altrimenti il nome tecnico.
+Una voce entra se è un oggetto con `entity` vero, senza `disabled`, e con `object` e `tab` veri. Entrano anche senza tab le schede di `CATALOG_ALSO`: Team, Role, DocumentFolder, KnowledgeBaseCategory, EmailTemplate, Template, TargetListCategory, EmailTemplateCategory, Report, BpmnFlowchart. L'etichetta è `Global.scopeNames` di I18n `it_IT`, altrimenti il nome tecnico.
 
-Per ogni scheda, `GET /api/v1/Metadata?key=entityDefs.{Nome}.fields`.
+Per ogni scheda, `GET /api/v1/Metadata?key=entityDefs.{Nome}.fields` e lo stesso per `links`.
 
 Un campo entra se il tipo è uno di:
 
-`varchar`, `text`, `enum`, `email`, `phone`, `int`, `float`, `bool`, `date`, `datetime`, `url`, `wysiwyg`, `multiEnum`, `currency`
+`varchar`, `text`, `enum`, `email`, `phone`, `int`, `float`, `bool`, `date`, `datetime`, `datetimeOptional`, `url`, `wysiwyg`, `multiEnum`, `currency`, `password`
 
-e se non è `readOnly` e non è `disabled`. Link, file, foreign key e campi calcolati non si abbinano. L'etichetta è, in ordine: campi della scheda in `it_IT`, campi `Global.fields`, nome tecnico. Contact.firstName in questa lingua è «Nominativo» perché sta nei campi globali.
+e se non è `readOnly` e non è `disabled`. L'etichetta è, in ordine: campi della scheda in `it_IT`, campi `Global.fields`, nome tecnico. Contact.firstName in questa lingua è «Nominativo» perché sta nei campi globali.
+
+I collegamenti entrano nel catalogo e non nel menu dei campi semplici. La pagina li usa nel passo di abbinamento.
+
+| Tipo nel catalogo | Legame Espo | Nella pagina |
+|---|---|---|
+| `link` | belongsTo | Colleghiamo una scheda |
+| `linkMultiple` | hasMany | Colleghiamo più record |
+| `linkParent` | linkParent | È un'attività appesa a una scheda |
+| `file` | file | Resta fra i campi. Il valore è un file da caricare |
 
 `cExternalKey` e `externalKey`, se presenti, entrano con l'etichetta fissa «Chiave esterna», anche se I18n dicesse altro.
 
