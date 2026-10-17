@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nesso</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", sans-serif; background: #f4f6f8; color: #1c2430; line-height: 1.45; }
+    a { color: #0b3a66; }
+    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 3px solid #0b57d0; outline-offset: 2px;
+    }
+    .skip { position: absolute; left: 8px; top: -40px; background: #fff; padding: 8px 12px; z-index: 3; }
+    .skip:focus { top: 8px; }
+    .sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+    .top { background: #16324f; color: #fff; }
+    .brand { margin: 0; padding: 14px 20px 0; font-size: 14px; letter-spacing: .02em; }
+    nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 12px; }
+    nav a { color: #fff; text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; padding: 0 14px; border-radius: 8px; border: 2px solid transparent; }
+    nav a[aria-current="page"] { background: #fff; color: #16324f; border-color: #fff; }
+    main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+    h1 { font-size: 1.8rem; margin: 0 0 8px; }
+    h2 { font-size: 1.15rem; margin: 0; }
+    .lead { font-size: 1.05rem; margin-top: 0; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    button, .btn { font: inherit; min-height: 44px; border-radius: 8px; padding: 8px 16px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; border: 2px solid #16324f; background: #16324f; color: #fff; }
+    button.secondary, a.secondary { background: #fff; color: #16324f; }
+    button.danger { background: #fff; color: #8d1d1a; border-color: #8d1d1a; }
+    .panel { background: #fff; border: 1px solid #d5dde6; border-radius: 12px; padding: 16px; margin-top: 16px; }
+    .choice { display: grid; gap: 12px; margin: 12px 0; }
+    .choice a, .home-link { display: block; background: #fff; border: 1px solid #d5dde6; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit; }
+    .choice a strong, .home-link strong { display: block; font-size: 1.1rem; margin-bottom: 4px; }
+    form { display: grid; gap: 14px; }
+    label, .field { display: grid; gap: 6px; font-weight: 600; }
+    .hint { font-weight: 400; color: #243140; }
+    input, select, textarea { font: inherit; font-weight: 400; padding: 10px 12px; border-radius: 8px; border: 1px solid #6b7c90; background: #fff; width: 100%; }
+    textarea { min-height: 96px; }
+    fieldset { border: 1px solid #d5dde6; border-radius: 10px; margin: 0; padding: 12px; display: grid; gap: 10px; }
+    legend { font-weight: 700; padding: 0 4px; }
+    .radios label { font-weight: 400; display: flex; gap: 10px; align-items: flex-start; }
+    .radios input { width: auto; margin-top: 4px; }
+    .error { color: #8d1d1a; font-weight: 700; }
+    .ok { color: #0d5c32; font-weight: 700; }
+    dl { display: grid; grid-template-columns: 11rem 1fr; gap: 6px 12px; margin: 8px 0 0; }
+    dt { font-weight: 700; }
+    dd { margin: 0; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    caption { text-align: left; font-weight: 700; margin-bottom: 8px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #d5dde6; vertical-align: top; }
+    code { word-break: break-all; }
+    dialog { border: 2px solid #16324f; border-radius: 12px; padding: 20px; max-width: 28rem; }
+    dialog::backdrop { background: rgba(16, 24, 32, .55); }
+    .step { font-weight: 700; margin-bottom: 0; }
+    @media (max-width: 640px) { dl { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#contenuto">Vai al contenuto</a>
+  <header class="top">
+    <p class="brand">Nesso</p>
+    <nav aria-label="Sezioni">
+      <a href="#/" data-nav="/">Inizio</a>
+      <a href="#/collegamenti" data-nav="/collegamenti">Collegamenti</a>
+      <a href="#/integrazioni" data-nav="/integrazioni">Integrazioni</a>
+      <a href="#/attivita" data-nav="/attivita">Attività</a>
+      <a id="espo" href="http://localhost:8088" target="_blank" rel="noopener">Apri Espo</a>
+    </nav>
+  </header>
+  <main id="contenuto" tabindex="-1"></main>
+  <p id="annuncio" class="sr" aria-live="polite"></p>
+  <dialog id="conferma">
+    <h2 id="conferma-titolo">Conferma</h2>
+    <p id="conferma-testo"></p>
+    <div class="actions">
+      <button type="button" class="secondary" id="conferma-no">Annulla</button>
+      <button type="button" class="danger" id="conferma-si">Elimina</button>
+    </div>
+  </dialog>
+  <script>
+    const kindLabel = { webhook: "Webhook", database: "Database", csv: "File CSV", http: "Uscita HTTP" };
+    const phrases = { creato: "Creato in Espo", aggiornato: "Aggiornato", invariato: "Invariato", synced: "Sincronizzato", inviato: "Inviato", ricevuto: "Ricevuto" };
+    const main = document.querySelector("#contenuto");
+    const dialog = document.querySelector("#conferma");
+    let catalog = [];
+    let espoUrl = "http://localhost:8088";
+    let state = { connections: [], pipelines: [], queue: [], deliveries: [] };
+    let health = { espo: "in attesa", fields: "" };
+    let draft = null;
+    let lastPath = "";
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+    }
+    function pathOf() {
+      const raw = (location.hash || "#/").replace(/^#/, "");
+      const path = raw.startsWith("/") ? raw : "/" + raw;
+      return path.replace(/\/+$/, "") || "/";
+    }
+    function say(text) { document.querySelector("#annuncio").textContent = text; }
+    function entityOf(name) { return catalog.find(item => item.name === name); }
+    function connectionOf(id) { return (state.connections || []).find(item => item.id === id); }
+    function fieldChoices(entityName, linksToo) {
+      const entity = entityOf(entityName);
+      return (entity ? entity.fields : []).filter(field => linksToo || field.type !== "link");
+    }
+    function options(items, valueKey, labelKey, selected) {
+      return items.map(item => `<option value="${esc(item[valueKey])}" ${item[valueKey] === selected ? "selected" : ""}>${esc(item[labelKey])}</option>`).join("");
+    }
+
+    function shell(title, html) {
+      document.title = title + " · Nesso";
+      main.innerHTML = html;
+      const here = pathOf();
+      document.querySelectorAll("[data-nav]").forEach(link => {
+        const on = here === link.dataset.nav || (link.dataset.nav !== "/" && here.startsWith(link.dataset.nav));
+        if (on) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      });
+      const heading = main.querySelector("h1");
+      if (heading && lastPath && here !== lastPath) {
+        heading.tabIndex = -1;
+        heading.focus();
+      }
+      lastPath = here;
+    }
+
+    function home() {
+      const connections = state.connections || [];
+      const pipelines = state.pipelines || [];
+      const espoText = health.espo === "raggiungibile" ? "Espo risponde." : "Espo non risponde ancora. Attendi il primo avvio e ricarica.";
+      shell("Inizio", `
+        <h1>Inizio</h1>
+        <p class="lead">Prima colleghi il sistema esterno. Poi scegli quale scheda di Espo riceve o manda i dati.</p>
+        <p>${esc(espoText)}</p>
+        <div class="choice">
+          <a href="#/collegamenti">
+            <strong>Collegamenti (${connections.length})</strong>
+            <span>Webhook, database, file CSV o destinazione HTTP.</span>
+          </a>
+          <a href="#/integrazioni">
+            <strong>Integrazioni (${pipelines.length})</strong>
+            <span>Quale scheda, quali campi, ogni quanto.</span>
+          </a>
+          <a href="#/attivita">
+            <strong>Attività</strong>
+            <span>Che cosa è entrato e che cosa è uscito.</span>
+          </a>
+        </div>
+        <div class="actions">
+          ${connections.length ? `<a class="btn" href="#/integrazioni/nuova/1">Nuova integrazione</a>` : `<a class="btn" href="#/collegamenti/nuovo">Crea il primo collegamento</a>`}
+          <a class="btn secondary" href="${esc(espoUrl)}" target="_blank" rel="noopener">Apri Espo</a>
+        </div>
+        <details class="panel">
+          <summary>Accesso all'Espo di questa prova</summary>
+          <p>Utente <strong>admin</strong>, password <strong>locale-admin</strong>. Vale solo per l'istanza su questo PC.</p>
+        </details>
+      `);
+    }
+
+    function connectionCard(item) {
+      let detail = "";
+      if (item.url) detail = `<dt>Indirizzo</dt><dd><code>${esc(item.url)}</code><br><span class="hint">Dallo al sistema esterno. Chi lo ha può inviare dati.</span></dd>`;
+      if (item.inboxUrl) detail = `<dt>Casella</dt><dd><code>${esc(item.inboxUrl)}</code><br><span class="hint">Usata se non indichi un altro indirizzo di destinazione.</span></dd>`;
+      if (item.kind === "csv") detail = `<dt>Cartella</dt><dd>scambio/${esc(item.id)}</dd>`;
+      if (item.kind === "database") detail = `<dt>Query</dt><dd><code>${esc(item.config.query || "")}</code></dd>`;
+      return `<article class="panel">
+        <h2>${esc(item.name)}</h2>
+        <dl><dt>Tipo</dt><dd>${esc(kindLabel[item.kind] || item.kind)}</dd>${detail}</dl>
+        <div class="actions"><button type="button" class="danger" data-del-c="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button></div>
+      </article>`;
+    }
+
+    function connectionsPage() {
+      const items = state.connections || [];
+      shell("Collegamenti", `
+        <h1>Collegamenti</h1>
+        <p class="lead">Un collegamento è il canale verso il sistema esterno. Non dice ancora quali campi vanno su Espo.</p>
+        <div class="actions"><a class="btn" href="#/collegamenti/nuovo">Nuovo collegamento</a></div>
+        ${items.map(connectionCard).join("") || `<p class="panel">Nessun collegamento. Il primo passo è crearne uno.</p>`}
+      `);
+      bindDelete();
+    }
+
+    function connectionFormPage() {
+      shell("Nuovo collegamento", `
+        <h1>Nuovo collegamento</h1>
+        <p class="lead">Scegli un solo tipo. I campi sotto cambiano in base a quella scelta.</p>
+        <form id="connection-form">
+          <label>Nome del collegamento
+            <input name="name" required autocomplete="off">
+            <span class="hint">Un nome che riconosci, per esempio «Ordini del magazzino».</span>
+          </label>
+          <fieldset class="radios">
+            <legend>Tipo</legend>
+            <label><input type="radio" name="kind" value="webhook" checked> Webhook. Il sistema esterno chiama un indirizzo.</label>
+            <label><input type="radio" name="kind" value="database"> Database. Il motore legge una SELECT. Non scrive sul database.</label>
+            <label><input type="radio" name="kind" value="csv"> File CSV. Depositi un file in una cartella.</label>
+            <label><input type="radio" name="kind" value="http"> Destinazione HTTP. Espo manda i dati fuori.</label>
+          </fieldset>
+          <div id="db-fields" hidden>
+            <label>Server <input name="host" autocomplete="off"></label>
+            <label>Porta <input name="port" value="3306" inputmode="numeric"></label>
+            <label>Database <input name="database" autocomplete="off"></label>
+            <label>Utente <input name="user" autocomplete="off"></label>
+            <label>Password <input name="password" type="password" autocomplete="new-password"></label>
+            <label>Query SELECT <textarea name="query"></textarea></label>
+            <p class="hint">Su questa prova il server è <code>db</code>, il database è <code>gestionale</code>, l'utente è <code>espocrm</code> e la password è <code>locale-db</code>.</p>
+          </div>
+          <div id="http-fields" hidden>
+            <label>Indirizzo di destinazione
+              <input name="url" type="url" placeholder="https://">
+              <span class="hint">Lascialo vuoto per usare la casella di questa app, visibile dopo il salvataggio.</span>
+            </label>
+          </div>
+          <p id="form-error" class="error" role="alert"></p>
+          <div class="actions">
+            <button type="submit">Salva collegamento</button>
+            <a class="btn secondary" href="#/collegamenti">Annulla</a>
+          </div>
+        </form>
+      `);
+      const form = document.querySelector("#connection-form");
+      const show = () => {
+        const kind = form.kind.value;
+        document.querySelector("#db-fields").hidden = kind !== "database";
+        document.querySelector("#http-fields").hidden = kind !== "http";
+      };
+      form.addEventListener("change", show);
+      show();
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const body = { name: form.name.value.trim(), kind: form.kind.value, config: {} };
+        if (!body.name) return showError("Scrivi il nome.");
+        if (body.kind === "database") {
+          body.config = { host: form.host.value.trim(), port: form.port.value.trim(), database: form.database.value.trim(), user: form.user.value.trim(), password: form.password.value, query: form.query.value.trim() };
+        }
+        if (body.kind === "http") body.config = { url: form.url.value.trim() };
+        const response = await fetch("/api/connections", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const data = await response.json();
+        if (!response.ok) return showError(data.error || "Non sono riuscito a salvare.");
+        say("Collegamento creato.");
+        location.hash = "#/collegamenti";
+      });
+    }
+
+    function showError(text) {
+      const box = document.querySelector("#form-error");
+      if (box) box.textContent = text;
+      say(text);
+    }
+
+    function integrationsPage() {
+      const items = state.pipelines || [];
+      shell("Integrazioni", `
+        <h1>Integrazioni</h1>
+        <p class="lead">Un'integrazione lega un collegamento a una scheda di Espo.</p>
+        <div class="actions"><a class="btn" href="#/integrazioni/nuova/1">Nuova integrazione</a></div>
+        ${items.map(item => {
+          const link = connectionOf(item.connection_id);
+          const entity = entityOf(item.espo_entity);
+          const when = item.schedule_minutes ? "Ogni " + item.schedule_minutes + " minuti" : "Solo a comando, oppure all'arrivo di un webhook";
+          const outcome = item.last_status === "errore" ? "Errore" : (item.last_run ? "Ultimo giro riuscito" : "Mai eseguita");
+          return `<article class="panel">
+            <h2>${esc(item.name)}</h2>
+            <dl>
+              <dt>Verso</dt><dd>${item.direction === "in" ? "I dati entrano in Espo" : "I dati escono da Espo"}</dd>
+              <dt>Scheda</dt><dd>${esc(entity ? entity.label : item.espo_entity)}</dd>
+              <dt>Collegamento</dt><dd>${esc(link ? link.name : "Nessuno")}</dd>
+              <dt>Quando</dt><dd>${esc(when)}</dd>
+              <dt>Esito</dt><dd>${esc(outcome)}${item.last_detail ? ". " + esc(item.last_detail) : ""}</dd>
+            </dl>
+            <div class="actions">
+              <button type="button" data-run="${esc(item.id)}">Esegui ora</button>
+              <button type="button" class="danger" data-del-p="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button>
+            </div>
+            <p class="hint" data-msg="${esc(item.id)}" role="status"></p>
+          </article>`;
+        }).join("") || `<p class="panel">Nessuna integrazione.</p>`}
+      `);
+      bindDelete();
+      main.querySelectorAll("[data-run]").forEach(button => button.addEventListener("click", () => execute(button.dataset.run)));
+    }
+
+    async function execute(id) {
+      const box = main.querySelector(`[data-msg="${id}"]`);
+      const button = main.querySelector(`[data-run="${id}"]`);
+      button.disabled = true;
+      box.textContent = "Esecuzione in corso.";
+      const response = await fetch("/api/pipelines/" + id + "/run", { method: "POST" });
+      const data = await response.json();
+      const text = response.ok
+        ? (data.waiting ? "In attesa di chiamate sul webhook." : "Esecuzione terminata. Il dettaglio è nel riquadro.")
+        : (data.error || "Esecuzione non riuscita.");
+      say(text);
+      await refresh();
+      const again = main.querySelector(`[data-msg="${id}"]`);
+      if (again) again.textContent = text;
+    }
+
+    function blankDraft() {
+      return { name: "", connectionId: "", entityMode: "existing", espoEntity: "", newSingular: "", newPlural: "", externalIdField: "", scheduleMinutes: "0", rows: [{ from: "", role: "field", to: "", lookupEntity: "", lookupBy: "" }] };
+    }
+
+    function wizard(step) {
+      if (!draft) draft = blankDraft();
+      const stepNumber = Number(step);
+      if (![1, 2, 3, 4].includes(stepNumber)) { location.hash = "#/integrazioni/nuova/1"; return; }
+      const titles = ["Nome e collegamento", "Scheda di Espo", "Abbinamento", "Quando eseguirla"];
+      shell("Nuova integrazione, passo " + stepNumber, `
+        <p class="step">Passo ${stepNumber} di 4</p>
+        <h1>${titles[stepNumber - 1]}</h1>
+        <form id="wizard" novalidate>
+          ${step === 1 ? stepConnection() : step === 2 ? stepEntity() : step === 3 ? stepMap() : stepReview()}
+          <p id="form-error" class="error" role="alert"></p>
+          <div class="actions">
+            ${stepNumber > 1 ? `<button type="button" class="secondary" id="back">Indietro</button>` : `<a class="btn secondary" href="#/integrazioni">Annulla</a>`}
+            <button type="submit">${stepNumber === 4 ? "Salva integrazione" : "Continua"}</button>
+          </div>
+        </form>
+      `);
+      const form = document.querySelector("#wizard");
+      const back = document.querySelector("#back");
+      if (back) back.addEventListener("click", () => { readStep(stepNumber); location.hash = "#/integrazioni/nuova/" + (stepNumber - 1); });
+      if (stepNumber === 2) {
+        form.addEventListener("change", () => {
+          const mode = form.entityMode.value;
+          document.querySelector("#existing-entity").hidden = mode !== "existing";
+          document.querySelector("#new-entity").hidden = mode !== "new";
+        });
+      }
+      if (stepNumber === 3) bindMap(form);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const error = readStep(stepNumber);
+        if (error) return showError(error);
+        if (stepNumber < 4) { location.hash = "#/integrazioni/nuova/" + (stepNumber + 1); return; }
+        await savePipeline();
+      });
+    }
+
+    function selectedKind() {
+      return (connectionOf(draft.connectionId) || {}).kind;
+    }
+
+    function stepConnection() {
+      const items = state.connections || [];
+      if (!items.length) {
+        return `<p>Prima serve un collegamento.</p><p><a href="#/collegamenti/nuovo">Crea un collegamento</a></p>`;
+      }
+      return `
+        <label>Nome dell'integrazione <input name="name" required value="${esc(draft.name)}"></label>
+        <label>Collegamento
+          <select name="connectionId" required>
+            <option value="">Scegli</option>
+            ${items.map(item => `<option value="${esc(item.id)}" ${item.id === draft.connectionId ? "selected" : ""}>${esc(item.name)} · ${esc(kindLabel[item.kind])}</option>`).join("")}
+          </select>
+          <span class="hint">Webhook, database e CSV portano dati dentro Espo. La destinazione HTTP li porta fuori.</span>
+        </label>`;
+    }
+
+    function stepEntity() {
+      const outbound = selectedKind() === "http";
+      const choices = catalog.map(item => `<option value="${esc(item.name)}" ${item.name === draft.espoEntity ? "selected" : ""}>${esc(item.label)}</option>`).join("");
+      if (outbound) {
+        return `<p>Questi dati escono da Espo verso il sistema esterno.</p>
+          <label>Scheda di Espo <select name="espoEntity" required><option value="">Scegli</option>${choices}</select></label>`;
+      }
+      return `
+        <fieldset class="radios">
+          <legend>Quale scheda</legend>
+          <label><input type="radio" name="entityMode" value="existing" ${draft.entityMode !== "new" ? "checked" : ""}> Una scheda già presente in Espo</label>
+          <label><input type="radio" name="entityMode" value="new" ${draft.entityMode === "new" ? "checked" : ""}> Una scheda che ancora non esiste</label>
+        </fieldset>
+        <div id="existing-entity" ${draft.entityMode === "new" ? "hidden" : ""}>
+          <label>Scheda <select name="espoEntity"><option value="">Scegli</option>${choices}</select></label>
+        </div>
+        <div id="new-entity" ${draft.entityMode === "new" ? "" : "hidden"}>
+          <label>Nome singolare <input name="newSingular" value="${esc(draft.newSingular)}" autocomplete="off"><span class="hint">Per esempio Consegna.</span></label>
+          <label>Nome plurale <input name="newPlural" value="${esc(draft.newPlural)}" autocomplete="off"><span class="hint">Per esempio Consegne. La scheda viene creata su Espo quando salvi.</span></label>
+        </div>`;
+    }
+
+    function stepMap() {
+      const outbound = selectedKind() === "http";
+      const rows = draft.rows.map((row, index) => mapFieldset(row, index, outbound)).join("");
+      const identity = outbound ? "" : `
+        <label>Colonna che identifica il record nel sistema esterno
+          <input name="externalIdField" value="${esc(draft.externalIdField)}" required autocomplete="off">
+          <span class="hint">Lo stesso record, con lo stesso valore, aggiorna la scheda invece di crearne un'altra.</span>
+        </label>`;
+      return `${identity}<div id="map-rows">${rows}</div><button type="button" class="secondary" id="add-row">Aggiungi un abbinamento</button>`;
+    }
+
+    function mapFieldset(row, index, outbound) {
+      if (outbound) {
+        return `<fieldset data-row>
+          <legend>Abbinamento ${index + 1}</legend>
+          <label>Campo di Espo <select class="espo">${options(fieldChoices(draft.espoEntity, false), "name", "label", row.from)}</select></label>
+          <label>Nome che riceve il sistema esterno <input class="ext" value="${esc(row.to)}" autocomplete="off"></label>
+          <button type="button" class="secondary remove">Togli questo abbinamento</button>
+        </fieldset>`;
+      }
+      const fieldBlock = draft.entityMode === "new"
+        ? `<label>Nome del campo nuovo <input class="field-label" value="${esc(row.to)}" autocomplete="off"></label>`
+        : `<label>Campo di Espo <select class="espo">${options(fieldChoices(draft.espoEntity, false), "name", "label", row.to)}</select></label>`;
+      const foreign = catalog.filter(item => item.name !== draft.espoEntity);
+      return `<fieldset data-row>
+        <legend>Abbinamento ${index + 1}</legend>
+        <label>Colonna del sistema esterno <input class="ext" value="${esc(row.from)}" autocomplete="off"></label>
+        <fieldset class="radios">
+          <legend>Che cosa ne facciamo</legend>
+          <label><input type="radio" class="role" name="role-${index}" value="field" ${row.role !== "link" ? "checked" : ""}> Lo scriviamo in un campo</label>
+          <label><input type="radio" class="role" name="role-${index}" value="link" ${row.role === "link" ? "checked" : ""}> Lo usiamo per collegare un'altra scheda</label>
+        </fieldset>
+        <div class="as-field" ${row.role === "link" ? "hidden" : ""}>${fieldBlock}</div>
+        <div class="as-link" ${row.role === "link" ? "" : "hidden"}>
+          <label>Scheda da collegare <select class="foreign">${options(foreign, "name", "label", row.lookupEntity)}</select></label>
+          <label>Campo con cui riconosciamo il record <select class="lookupBy">${options(fieldChoices(row.lookupEntity || (foreign[0] && foreign[0].name), false), "name", "label", row.lookupBy)}</select></label>
+        </div>
+        <button type="button" class="secondary remove">Togli questo abbinamento</button>
+      </fieldset>`;
+    }
+
+    function bindMap(form) {
+      const outbound = selectedKind() === "http";
+      const paint = (keepDraft) => {
+        if (!keepDraft) readStep(3);
+        document.querySelector("#map-rows").innerHTML = draft.rows.map((row, index) => mapFieldset(row, index, outbound)).join("");
+        hook();
+      };
+      const hook = () => {
+        form.querySelectorAll("[data-row]").forEach(row => {
+          const role = row.querySelector(".role");
+          if (role) row.querySelectorAll(".role").forEach(input => input.addEventListener("change", () => paint(false)));
+          const foreign = row.querySelector(".foreign");
+          if (foreign) foreign.addEventListener("change", () => paint(false));
+          const remove = row.querySelector(".remove");
+          remove.addEventListener("click", () => {
+            readStep(3);
+            const index = [...form.querySelectorAll("[data-row]")].indexOf(row);
+            draft.rows.splice(index, 1);
+            if (!draft.rows.length) draft.rows.push({ from: "", role: "field", to: "", lookupEntity: "", lookupBy: "" });
+            paint(true);
+          });
+        });
+      };
+      hook();
+      document.querySelector("#add-row").addEventListener("click", () => {
+        readStep(3);
+        draft.rows.push({ from: "", role: "field", to: "", lookupEntity: "", lookupBy: "" });
+        paint(true);
+      });
+    }
+
+    function stepReview() {
+      const link = connectionOf(draft.connectionId);
+      const outbound = selectedKind() === "http";
+      const entityLabel = draft.entityMode === "new" && !outbound ? draft.newSingular : ((entityOf(draft.espoEntity) || {}).label || draft.espoEntity);
+      const when = { "0": "Solo a comando, oppure all'arrivo di un webhook", "5": "Ogni 5 minuti", "15": "Ogni 15 minuti", "60": "Ogni ora" };
+      return `
+        <p>Controlla. Se salvi, la scheda nuova e i collegamenti interni vengono creati su Espo.</p>
+        <dl>
+          <dt>Nome</dt><dd>${esc(draft.name)}</dd>
+          <dt>Collegamento</dt><dd>${esc(link ? link.name : "")}</dd>
+          <dt>Scheda</dt><dd>${esc(entityLabel)}</dd>
+          ${outbound ? "" : `<dt>Identità</dt><dd>${esc(draft.externalIdField)}</dd>`}
+          <dt>Abbinamenti</dt><dd>${draft.rows.length}</dd>
+        </dl>
+        <label>Quando
+          <select name="scheduleMinutes">
+            ${Object.entries(when).map(([value, label]) => `<option value="${value}" ${draft.scheduleMinutes === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>`;
+    }
+
+    function readStep(step) {
+      const form = document.querySelector("#wizard");
+      if (!form) return "";
+      if (step === 1) {
+        if (!form.name) return "Prima crea un collegamento.";
+        draft.name = form.name.value.trim();
+        draft.connectionId = form.connectionId.value;
+        if (!draft.name) return "Scrivi il nome dell'integrazione.";
+        if (!draft.connectionId) return "Scegli un collegamento.";
+      }
+      if (step === 2) {
+        const outbound = selectedKind() === "http";
+        if (outbound) {
+          draft.entityMode = "existing";
+          draft.espoEntity = form.espoEntity.value;
+          if (!draft.espoEntity) return "Scegli la scheda di Espo.";
+        } else {
+          draft.entityMode = form.entityMode.value;
+          if (draft.entityMode === "new") {
+            draft.newSingular = form.newSingular.value.trim();
+            draft.newPlural = form.newPlural.value.trim();
+            draft.espoEntity = "__new__";
+            if (!draft.newSingular || !draft.newPlural) return "Scrivi il nome singolare e il nome plurale.";
+          } else {
+            draft.espoEntity = form.espoEntity.value;
+            if (!draft.espoEntity) return "Scegli la scheda di Espo.";
+          }
+        }
+      }
+      if (step === 3) {
+        const outbound = selectedKind() === "http";
+        if (!outbound && form.externalIdField) draft.externalIdField = form.externalIdField.value.trim();
+        draft.rows = [...form.querySelectorAll("[data-row]")].map(row => {
+          const roleInput = row.querySelector(".role:checked");
+          const role = roleInput ? roleInput.value : "field";
+          const ext = row.querySelector(".ext");
+          if (outbound) return { from: row.querySelector(".espo").value, role: "field", to: ext.value.trim(), lookupEntity: "", lookupBy: "" };
+          const typed = row.querySelector(".field-label");
+          const chosen = row.querySelector(".espo");
+          return {
+            from: ext.value.trim(),
+            role,
+            to: role === "link" ? (row.querySelector(".foreign") || {}).value || "" : (typed ? typed.value.trim() : (chosen ? chosen.value : "")),
+            lookupEntity: role === "link" ? row.querySelector(".foreign").value : "",
+            lookupBy: role === "link" ? row.querySelector(".lookupBy").value : ""
+          };
+        });
+        if (!outbound && !draft.externalIdField) return "Indica la colonna che identifica il record.";
+        if (!draft.rows.some(row => row.from && row.to)) return "Compila almeno un abbinamento.";
+      }
+      if (step === 4 && form.scheduleMinutes) draft.scheduleMinutes = form.scheduleMinutes.value;
+      return "";
+    }
+
+    async function savePipeline() {
+      const outbound = selectedKind() === "http";
+      const mapping = draft.rows.filter(row => row.from && row.to).map(row => {
+        if (outbound) return { from: row.from, to: row.to, role: "field" };
+        if (row.role === "link") return { from: row.from, to: row.lookupEntity, role: "link", lookupEntity: row.lookupEntity, lookupBy: row.lookupBy };
+        return { from: row.from, to: row.to, role: "field" };
+      });
+      const body = {
+        name: draft.name,
+        connectionId: draft.connectionId,
+        direction: outbound ? "out" : "in",
+        espoEntity: outbound ? draft.espoEntity : (draft.entityMode === "new" ? "__new__" : draft.espoEntity),
+        newSingular: draft.newSingular,
+        newPlural: draft.newPlural,
+        externalIdField: draft.externalIdField,
+        scheduleMinutes: Number(draft.scheduleMinutes),
+        mapping
+      };
+      const button = document.querySelector("#wizard button[type=submit]");
+      button.disabled = true;
+      const response = await fetch("/api/pipelines", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await response.json();
+      button.disabled = false;
+      if (!response.ok) return showError(data.error || "Non sono riuscito a salvare.");
+      draft = null;
+      say("Integrazione salvata.");
+      catalog = [];
+      location.hash = "#/integrazioni";
+    }
+
+    function activityPage() {
+      const names = Object.fromEntries((state.pipelines || []).map(item => [item.id, item.name]));
+      const inbound = (state.queue || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(item.external_id)}</td><td>${esc(phrases[item.detail] || item.detail || item.status)}</td><td>${esc(item.updated_at)}</td></tr>`);
+      const outbound = (state.deliveries || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.connection_id || "")}</td><td>Uscita</td><td>${esc(phrases[item.status] || item.status)}${item.detail ? " — " + esc(item.detail) : ""}</td><td>${esc(item.created_at)}</td></tr>`);
+      const rows = inbound.concat(outbound).join("") || `<tr><td colspan="4">Ancora nessun passaggio.</td></tr>`;
+      shell("Attività", `
+        <h1>Attività</h1>
+        <p class="lead">Gli ultimi ingressi in Espo e le ultime uscite verso un sistema esterno.</p>
+        <table>
+          <caption>Ultimi passaggi</caption>
+          <thead><tr><th scope="col">Integrazione</th><th scope="col">Record</th><th scope="col">Esito</th><th scope="col">Quando</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `);
+    }
+
+    function notFound() {
+      shell("Pagina non trovata", `<h1>Pagina non trovata</h1><p><a href="#/">Torna all'inizio</a></p>`);
+    }
+
+    function bindDelete() {
+      main.querySelectorAll("[data-del-c], [data-del-p]").forEach(button => {
+        button.addEventListener("click", () => {
+          const connection = button.dataset.delC;
+          document.querySelector("#conferma-titolo").textContent = connection ? "Eliminare questo collegamento?" : "Eliminare questa integrazione?";
+          document.querySelector("#conferma-testo").textContent = button.dataset.name + (connection ? ". Le integrazioni che lo usano restano, senza canale." : ". I record già scritti su Espo restano.");
+          dialog.showModal();
+          document.querySelector("#conferma-si").onclick = async () => {
+            const url = connection ? "/api/connections/" + connection : "/api/pipelines/" + button.dataset.delP;
+            await fetch(url, { method: "DELETE" });
+            dialog.close();
+            say("Eliminato.");
+            await refresh();
+          };
+        });
+      });
+    }
+    document.querySelector("#conferma-no").addEventListener("click", () => dialog.close());
+
+    function render() {
+      const path = pathOf();
+      if (path === "/") return home();
+      if (path === "/collegamenti") return connectionsPage();
+      if (path === "/collegamenti/nuovo") return connectionFormPage();
+      if (path === "/integrazioni") return integrationsPage();
+      if (path.startsWith("/integrazioni/nuova")) {
+        const step = Number(path.split("/")[3] || "1");
+        return wizard(step);
+      }
+      if (path === "/attivita") return activityPage();
+      notFound();
+    }
+
+    async function refresh() {
+      const [stateResponse, healthResponse] = await Promise.all([fetch("/api/state"), fetch("/api/health")]);
+      state = await stateResponse.json();
+      health = await healthResponse.json();
+      if (!catalog.length) {
+        const data = await (await fetch("/api/catalog")).json();
+        catalog = data.entities || [];
+        if (data.espoPublicUrl) {
+          espoUrl = data.espoPublicUrl;
+          document.querySelector("#espo").href = espoUrl;
+        }
+      }
+      render();
+    }
+
+    window.addEventListener("hashchange", () => {
+      if (!pathOf().startsWith("/integrazioni/nuova")) draft = null;
+      refresh();
+    });
+    if (!location.hash) location.hash = "#/";
+    refresh();
+  </script>
+</body>
+</html>

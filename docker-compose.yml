@@ -1,0 +1,89 @@
+name: nessocrm
+
+# Istanza locale vuota. Non monta i dump di produzione.
+
+services:
+  db:
+    image: mariadb:11.4
+    container_name: nessocrm-db
+    environment:
+      MARIADB_ROOT_PASSWORD: locale-root
+      MARIADB_DATABASE: espocrm
+      MARIADB_USER: espocrm
+      MARIADB_PASSWORD: locale-db
+    volumes:
+      - db:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      start_period: 20s
+      timeout: 5s
+      retries: 20
+
+  espocrm:
+    image: espocrm/espocrm:10.0
+    container_name: nessocrm-espo
+    environment:
+      ESPOCRM_DATABASE_HOST: db
+      ESPOCRM_DATABASE_USER: espocrm
+      ESPOCRM_DATABASE_PASSWORD: locale-db
+      ESPOCRM_ADMIN_USERNAME: admin
+      ESPOCRM_ADMIN_PASSWORD: locale-admin
+      ESPOCRM_SITE_URL: http://localhost:8088
+      ESPOCRM_LANGUAGE: it_IT
+    volumes:
+      - espo-data:/var/www/html/data
+      - espo-custom:/var/www/html/custom
+      - espo-client:/var/www/html/client/custom
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bin/command", "app-check"]
+      start_period: 180s
+      interval: 15s
+      timeout: 20s
+      retries: 12
+    ports:
+      - "8088:80"
+
+  espocrm-daemon:
+    image: espocrm/espocrm:10.0
+    container_name: nessocrm-daemon
+    volumes_from:
+      - espocrm
+    restart: unless-stopped
+    entrypoint: docker-daemon.sh
+    depends_on:
+      espocrm:
+        condition: service_healthy
+
+  motore:
+    build: ./motore
+    container_name: nessocrm-motore
+    environment:
+      ESPO_BASE_URL: http://espocrm
+      ESPO_PUBLIC_URL: http://localhost:8088
+      ESPO_USER: admin
+      ESPO_PASSWORD: locale-admin
+      LISTEN_PORT: "8091"
+      PUBLIC_BASE_URL: http://localhost:8091
+      SCAMBIO_DIR: /scambio
+    ports:
+      - "8091:8091"
+    volumes:
+      - motore-data:/data
+      - ./scambio:/scambio
+    restart: unless-stopped
+    depends_on:
+      espocrm:
+        condition: service_healthy
+
+volumes:
+  db:
+  espo-data:
+  espo-custom:
+  espo-client:
+  motore-data:
