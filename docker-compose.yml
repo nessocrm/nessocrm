@@ -36,6 +36,8 @@ services:
       - espo-data:/var/www/html/data
       - espo-custom:/var/www/html/custom
       - espo-client:/var/www/html/client/custom
+      - ./local/advanced-pack/custom/Espo/Modules/Advanced:/var/www/html/custom/Espo/Modules/Advanced
+      - ./local/advanced-pack/client/custom/modules/advanced:/var/www/html/client/custom/modules/advanced
     restart: unless-stopped
     depends_on:
       db:

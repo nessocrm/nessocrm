@@ -9,4 +9,4 @@ Lavorare solo in questa cartella. Remoto: https://github.com/nessocrm/nessocrm.
 
 Non modificare, spostare o committare `C:\Users\ndoni\Documents\bitbuket\2026-10-14-backup-espocrm-produzione`.
 
-Non importare i dump di produzione. Non copiare l'Advanced Pack dal tar. Espo di prova resta vuoto. Le scritture verso Espo passano dalle API HTTP.
+Non importare i dump di produzione. Espo di prova resta vuoto. L'Advanced Pack, se presente, sta solo in `local/advanced-pack/` e non si committa. Le scritture verso Espo passano dalle API HTTP.

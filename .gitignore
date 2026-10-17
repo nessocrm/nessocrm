@@ -5,3 +5,6 @@ __pycache__/
 *.sqlite
 scambio/**
 !scambio/.gitkeep
+
+# Advanced Pack commerciale: resta su questo PC, non entra nel repository.
+local/advanced-pack/

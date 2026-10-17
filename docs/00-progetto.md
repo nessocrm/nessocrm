@@ -104,7 +104,7 @@ Da prevedere insieme: credenziali separate da quelle di Espo, prova di invio dal
 - Giornale degli scarti, riga per riga, visibile in Attività. Oggi lo scarto del database sta solo nel dettaglio dell'ultimo giro.
 - Ripetizione del giro con backoff, e uno scarto che non blocca l'intervallo successivo.
 - Test automatici sui quattro canali, sulla creazione scheda e sul lookup.
-- Advanced Pack sull'istanza locale. Il pacchetto è nel backup, è commerciale, e va installato a parte sull'immagine pubblica se la prova deve vedere flussi BPM e report. I dati di produzione restano fuori.
+- Advanced Pack sull'istanza locale. I file del modulo stanno in `local/advanced-pack/`, fuori da git. L'immagine pubblica non lo contiene. I dati di produzione restano fuori.
 
 ### Quello che resta documentazione del backup
 
