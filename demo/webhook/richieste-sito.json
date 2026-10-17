@@ -1,0 +1,24 @@
+[
+  {
+    "codice": "WEB-77",
+    "nome": "Francesca",
+    "cognome": "Bellini",
+    "email": "francesca.bellini@ospite.example.test",
+    "telefono": "3471000077",
+    "stato": "New",
+    "origine": "Web Site",
+    "azienda": "Pastificio Alto Adige",
+    "nota": "Configuratore del sito: linea sfogliatrice, tre formati, consegna 2027."
+  },
+  {
+    "codice": "WEB-78",
+    "nome": "Omar",
+    "cognome": "Fabbri",
+    "email": "omar.fabbri@ospite.example.test",
+    "telefono": "3471000078",
+    "stato": "Assigned",
+    "origine": "Web Site",
+    "azienda": "Tintoria Lambro",
+    "nota": "Ha chiesto richiamo entro 48 ore per il recupero calore."
+  }
+]

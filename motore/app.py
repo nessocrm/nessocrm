@@ -340,6 +340,13 @@ def prepare_espo() -> None:
     except Exception as error:
         STATE["fields"] = "errore"
         STATE["detail"] = str(error)
+        print("[motore] preparazione", error)
+        return
+    try:
+        from demo_meridia import seed_demo
+        seed_demo(connect, save_connection, save_pipeline, run_pipeline, ingest, SCAMBIO, espo_request)
+    except Exception as error:
+        print("[motore] demo", error)
 
 
 def apply_transform(rule: dict, payload: dict) -> str | None:
@@ -568,7 +575,7 @@ def snapshot() -> dict:
 
 WRITABLE = {
     "varchar", "text", "enum", "email", "phone", "int", "float", "bool",
-    "date", "datetime", "url", "wysiwyg", "multiEnum", "currency",
+    "date", "datetime", "datetimeOptional", "url", "wysiwyg", "multiEnum", "currency",
 }
 CATALOG: dict = {"at": 0.0, "data": None}
 
@@ -693,7 +700,7 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
             })
             layout_names.append(link_name)
             continue
-        if creating:
+        if creating and (target not in by_name or by_name[target].get("type") == "link"):
             requested = camel_name(target)
             actual = ensure_field(entity, requested, target, 180)
             compiled.append({"from": source, "to": actual, "transform": "copy"})

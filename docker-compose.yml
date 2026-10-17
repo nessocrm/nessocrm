@@ -73,11 +73,20 @@ services:
       LISTEN_PORT: "8091"
       PUBLIC_BASE_URL: http://localhost:8091
       SCAMBIO_DIR: /scambio
+      DEMO_SEED: "1"
+      DEMO_DIR: /demo
+      DEMO_DB_HOST: db
+      DEMO_DB_PORT: "3306"
+      DEMO_DB_ROOT_USER: root
+      DEMO_DB_ROOT_PASSWORD: locale-root
+      DEMO_DB_USER: espocrm
+      DEMO_DB_PASSWORD: locale-db
     ports:
       - "8091:8091"
     volumes:
       - motore-data:/data
       - ./scambio:/scambio
+      - ./demo:/demo:ro
     restart: unless-stopped
     depends_on:
       espocrm:

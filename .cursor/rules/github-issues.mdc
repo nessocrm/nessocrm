@@ -1,0 +1,80 @@
+---
+description: Tracciamento bug/task via GitHub Issues — vibeissue
+alwaysApply: true
+---
+
+# GitHub Issues — fonte di verità (vibeissue)
+
+Per **bug**, **evolutive** e **task di sprint**, preferire **GitHub Issues** tramite:
+
+```bash
+python scripts/github_issue.py <comando>
+```
+
+**L'agente deve eseguire lo script direttamente** (non chiedere all'utente comandi manuali).
+
+> **Piattaforma:** questa regola è per **Cursor**. Per Claude Code, Copilot, Windsurf e altri tool vedi `AGENTS.md`, `CLAUDE.md` e [vibeissue.github.io/docs/platforms/overview/](https://vibeissue.github.io/docs/platforms/overview/).
+
+Repository configurato in `.env` (`GITHUB_REPO`), `tracker/github_repo` o variabile d'ambiente.
+
+Token letto automaticamente da (in ordine):
+1. `.env` nella root del repo (`GITHUB_TOKEN=...`)
+2. `GITHUB_TOKEN` nel processo (sessione / variabile OS ereditata)
+3. `.secrets/github_token` (gitignored)
+4. **Solo Windows:** variabili utente da registry (fallback)
+
+Guida: [vibeissue.github.io/docs/it](https://vibeissue.github.io/docs/it/) · Piattaforme: [vibeissue.github.io/docs/it/platforms/overview/](https://vibeissue.github.io/docs/it/platforms/overview/) · Sito: [vibeissue.github.io](https://vibeissue.github.io) · CLI: [tracker/README.md](../tracker/README.md).
+
+## Quando l'utente segnala un problema o chiede lavoro
+
+1. **Verifica** se esiste già un'issue (`list` o ricerca per titolo / legacy ID).
+2. **Crea** issue con `create` (o import da manifest se è un item legacy noto).
+3. **Non creare** nuovi file markdown sparsi solo per tracciare bug aperti — usa GitHub Issues.
+4. I piani dettagliati in `docs/` o cartelle dedicate restano **specifica**; lo stato operativo vive su GitHub.
+
+## Commit e PR
+
+Referenzia l'issue nei commit che la risolvono:
+
+```
+Fixes #123
+```
+
+o `Closes #123` / `Refs #123` se parziale.
+
+## Convenzioni label
+
+| Label | Uso |
+|-------|-----|
+| `bug` | Comportamento errato o regressione |
+| `enhancement` | Miglioramento prodotto non bug |
+| `task` | Task sprint / lavoro pianificato |
+| `documentation` | Solo docs |
+| `priority-high` / `priority-medium` / `priority-low` | Urgenza |
+| `area-frontend` | UI, UX, client |
+| `area-backend` | API, servizi, logica server |
+| `area-infra` | CI/CD, Docker, deploy |
+| `area-docs` | README, guide, sito |
+| `imported` | Migrato da tracker locale legacy |
+
+Nel body delle issue importate, includere **`Legacy ID:`** (es. `BUG-001`, `TASK-UI-042`) e link al file markdown locale.
+
+## Comandi utili
+
+```bash
+python scripts/github_issue.py labels --apply
+python scripts/github_issue.py import --dry-run
+python scripts/github_issue.py import --apply
+python scripts/github_issue.py create "Titolo" --labels bug,area-frontend --body "..."
+python scripts/github_issue.py edit N --title "..." --body "..." --labels task,priority-low
+python scripts/github_issue.py list
+python scripts/github_issue.py comment N --body "..."
+python scripts/github_issue.py close N
+python scripts/github_issue.py close-batch 1 2 3 --reason "..."
+```
+
+**Regola agente:** eseguire sempre `python scripts/github_issue.py` dal repo — non delegare comandi shell all'utente se il token è configurato.
+
+## Chat con l'agente (italiano)
+
+Se l'utente dice *«apri issue per…»*, *«traccia bug…»*, *«crea task GitHub…»*, *«modifica issue #N…»* → usa lo script, non nuovi markdown di tracking.

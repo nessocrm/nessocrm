@@ -1,0 +1,47 @@
+name: Evolutiva / idea
+description: Nuova funzionalità o miglioramento prodotto (non bug)
+title: "[Evolutiva] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Idee e scenari utente. Per lavoro già pianificato usa il template **Task sprint** o le issue con label `task`.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema o opportunità
+      description: Che bisogno utente risolve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposta
+      description: Come immagini la soluzione?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorità percepita
+      options:
+        - Bassa — nice to have
+        - Media — utile presto
+        - Alta — blocca adozione
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Ambito
+      options:
+        - label: Frontend
+        - label: Backend
+        - label: Infrastruttura / CI
+        - label: Documentazione
+        - label: Fuori sprint attuale (backlog lungo)

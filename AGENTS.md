@@ -15,3 +15,13 @@ Il backup di produzione è un'altra cartella: `C:\Users\ndoni\Documents\bitbuket
 ## Git
 
 Il commit e il push partono da questa cartella, verso `nessocrm/nessocrm`. Non inizializzare git nel backup.
+
+## Issue
+
+Bug, evolutive e task si aprono su GitHub Issues con vibeissue, dalla root del repo:
+
+```
+python scripts/github_issue.py list
+```
+
+Il token non si incolla in chat. Sta in `.env`, nella variabile `GITHUB_TOKEN`, oppure in `.secrets/github_token`. La regola per Cursor è `.cursor/rules/github-issues.mdc`.

@@ -1,0 +1,9 @@
+codice,nome,cognome,email,telefono,stato,origine,azienda,nota
+LEAD-50,Anna,Valeri,anna.valeri@ospite.example.test,3471000050,New,Campaign,Fiera Automazione Verona,Richiesta scheda tecnica sulla linea di pallettizzazione.
+LEAD-51,Giorgio,Nardin,giorgio.nardin@ospite.example.test,3471000051,Assigned,Web Site,Birrificio Colli,Form del sito: vuole un sopralluogo per il pastorizzatore.
+LEAD-52,Lucia,Pesce,lucia.pesce@ospite.example.test,3471000052,In Process,Partner,Segnalato da Sensori Delta,Il partner ha indicato un prospect nel packaging.
+LEAD-53,Stefano,Iorio,stefano.iorio@ospite.example.test,3471000053,New,Call,Conceria Piave,Telefonata al centralino dopo il sito.
+LEAD-54,Marta,Longo,marta.longo@ospite.example.test,3471000054,In Process,Existing Customer,Cartiera del Livenza,Cliente attuale chiede un secondo stabilimento.
+LEAD-55,Pietro,Sala,pietro.sala@ospite.example.test,3471000055,New,Public Relations,Articolo rivista impianti,Ha letto il caso della cogenerazione e chiede un contatto.
+LEAD-56,Elena,Vianello,elena.vianello@ospite.example.test,3471000056,Assigned,Email,Distilleria Euganea,Email alla casella commerciale.
+LEAD-57,Davide,Costa,davide.costa@ospite.example.test,3471000057,New,Other,Consorzio ortofrutta,Non ha ancora un impianto, vuole solo una stima.

@@ -1,0 +1,51 @@
+# GitHub label definitions — generic project set
+# Apply with: python scripts/github_issue.py labels --apply
+
+labels:
+  - name: bug
+    color: d73a4a
+    description: Something isn't working
+
+  - name: enhancement
+    color: a2eeef
+    description: New feature or improvement
+
+  - name: task
+    color: 0075ca
+    description: Sprint task or actionable work item
+
+  - name: documentation
+    color: 0075ca
+    description: Documentation improvements
+
+  - name: priority-high
+    color: b60205
+    description: High priority — blocks release or core flow
+
+  - name: priority-medium
+    color: fbca04
+    description: Medium priority
+
+  - name: priority-low
+    color: 0e8a16
+    description: Low priority or nice-to-have
+
+  - name: area-frontend
+    color: 1d76db
+    description: UI, UX, client-side code
+
+  - name: area-backend
+    color: 5319e7
+    description: APIs, services, server logic
+
+  - name: area-infra
+    color: 006b75
+    description: CI/CD, Docker, deployment, ops
+
+  - name: area-docs
+    color: c5def5
+    description: README, guides, site content
+
+  - name: imported
+    color: e4e669
+    description: Imported from legacy tracker or local markdown

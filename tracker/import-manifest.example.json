@@ -1,0 +1,12 @@
+[
+  {
+    "title": "Login form shows blank page on mobile Safari",
+    "labels": ["bug", "priority-high", "area-frontend", "imported"],
+    "body": "**Legacy ID:** `BUG-001`\n\n**Stato legacy:** Aperto\n\nSu iPhone Safari, dopo submit del form login la pagina resta bianca. Chrome Android OK.\n\n**Passi:**\n1. Apri `/login` su Safari iOS\n2. Inserisci credenziali valide\n3. Submit → schermo bianco\n\n**Riferimento locale:** `docs/bugs.md#bug-001`"
+  },
+  {
+    "title": "Add dark mode toggle in settings",
+    "labels": ["task", "priority-medium", "area-frontend", "imported"],
+    "body": "**Legacy ID:** `TASK-UI-042`\n\n**Stato:** Da implementare\n\nToggle tema chiaro/scuro in pagina impostazioni, persistito in localStorage.\n\n**Definition of Done:**\n- [ ] Toggle visibile in `/settings`\n- [ ] Preferenza salvata al reload\n- [ ] Nessun flash bianco al primo paint\n\n**Riferimento locale:** `plans/dark-mode.md`"
+  }
+]

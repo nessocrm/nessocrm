@@ -1,0 +1,6 @@
+codice,titolo,inizio,fine,stato,luogo,chiave_account
+VIS-1,Sopralluogo linea Brenta,2026-11-05 09:30:00,2026-11-05 12:30:00,Planned,Vicenza stabilimento nord,anagrafiche-clienti-erp:CLI-4100
+VIS-2,Rinnovo contratto cartiera,2026-11-07 14:00:00,2026-11-07 16:00:00,Planned,Sacile sala riunioni,anagrafiche-clienti-erp:CLI-4101
+VIS-3,Chiusura offerta ATEX,2026-10-28 10:00:00,2026-10-28 11:30:00,Held,Bolzano,anagrafiche-clienti-erp:CLI-4106
+VIS-4,Kickoff rilievo Garda,2026-11-11 09:00:00,2026-11-11 13:00:00,Planned,Brescia centrale,anagrafiche-clienti-erp:CLI-4107
+VIS-5,Visita laminatoio con progettazione,2026-11-18 15:00:00,2026-11-18 17:30:00,Planned,Mantova,anagrafiche-clienti-erp:CLI-4104

@@ -1,0 +1,44 @@
+name: Task sprint
+description: Lavoro pianificato con Definition of Done
+title: "[Task] "
+labels: ["task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Task eseguibile per uno sprint. Collega il piano di riferimento (doc locale o URL) se esiste.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Obiettivo
+    validations:
+      required: true
+
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      placeholder: |
+        - [ ] ...
+        - [ ] Test manuale
+        - [ ] Documentazione aggiornata
+    validations:
+      required: true
+
+  - type: input
+    id: plan-link
+    attributes:
+      label: Piano di riferimento (path o URL)
+      placeholder: "docs/plans/feature-x.md"
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorità
+      options:
+        - P0 — subito
+        - P1 — prossimo sprint
+        - P2 — backlog
+    validations:
+      required: true

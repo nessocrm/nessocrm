@@ -18,5 +18,7 @@ L'applicazione è un middleware. Da un lato c'è EspoCRM, dall'altro un sistema 
 | [09-interfaccia.md](09-interfaccia.md) | Ogni controllo della pagina, e che cosa la pagina non fa |
 | [10-stato-della-prova.md](10-stato-della-prova.md) | Configurazione e record presenti sul volume locale il 17/10/2026 |
 | [11-esercizio.md](11-esercizio.md) | Avvio, fermata, database di prova, dove guardare se un giro fallisce |
+| [12-token-github.md](12-token-github.md) | Token per le issue, da fare quando serve |
+| [13-demo-meridia.md](13-demo-meridia.md) | Demo da impresa: processi e dati del Gruppo Meridia |
 
 La scheda breve usata come ingresso è [../motore.md](../motore.md). L'avvio rapido è [../README.md](../README.md).

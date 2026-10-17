@@ -1,0 +1,67 @@
+name: Bug
+description: Qualcosa non funziona come previsto
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Segnala un bug. Per lavoro in corso usa le **Issues** come fonte unica — evita file markdown sparsi per tracciare bug aperti.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Cosa succede
+      description: Comportamento osservato
+      placeholder: "Dopo il login la pagina resta bianca su Safari..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Cosa ti aspettavi
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Passi per riprodurre
+      placeholder: |
+        1. Apri l'app / URL
+        2. Esegui azione X
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Frontend / UI
+        - Backend / API
+        - Infrastruttura / Deploy
+        - Documentazione
+        - Altro
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Versione / commit
+      placeholder: "v1.2.0 / abc1234"
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Ambiente
+      placeholder: "Windows 11, Chrome 120, Node 20..."
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log / screenshot
+      description: Incolla errori o link screenshot (senza dati sensibili)
