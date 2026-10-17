@@ -287,13 +287,19 @@ def show_on_layout(entity: str, names: list[str]) -> None:
     if not wanted:
         return
     code, current = espo_request("GET", f"/api/v1/{entity}/layout/detail")
-    rows = current if code == 200 and isinstance(current, list) else [[{"name": "name", "fullWidth": True}]]
+    panels = current if code == 200 and isinstance(current, list) else []
+    if not panels or not isinstance(panels[0], dict) or "rows" not in panels[0]:
+        panels = [{"label": "Overview", "rows": [[{"name": "name", "fullWidth": True}]]}]
     present = {
         cell.get("name")
-        for row in rows if isinstance(row, list)
+        for panel in panels if isinstance(panel, dict)
+        for row in panel.get("rows") or [] if isinstance(row, list)
         for cell in row if isinstance(cell, dict)
     }
     extra = [name for name in wanted if name not in present]
+    if not extra:
+        return
+    rows = panels[0]["rows"]
     pair: list[dict] = []
     for name in extra:
         pair.append({"name": name})
@@ -302,10 +308,9 @@ def show_on_layout(entity: str, names: list[str]) -> None:
             pair = []
     if pair:
         rows.append(pair)
-    if extra:
-        status, result = espo_request("PUT", f"/api/v1/{entity}/layout/detail", rows)
-        if status not in (200, 201):
-            raise RuntimeError(f"layout scheda HTTP {status}: {result}")
+    status, result = espo_request("PUT", f"/api/v1/{entity}/layout/detail", panels)
+    if status not in (200, 201):
+        raise RuntimeError(f"layout scheda HTTP {status}: {result}")
     code, columns = espo_request("GET", f"/api/v1/{entity}/layout/list")
     cols = columns if code == 200 and isinstance(columns, list) else [{"name": "name", "link": True}]
     listed = {col.get("name") for col in cols if isinstance(col, dict)}
