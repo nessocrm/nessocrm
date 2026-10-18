@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import hmac
@@ -102,6 +103,27 @@ def init_db() -> None:
                 detail TEXT,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS scarto (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                external_id TEXT,
+                payload_json TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS run_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chiave (
+                entity TEXT NOT NULL,
+                external_key TEXT NOT NULL,
+                espo_id TEXT NOT NULL,
+                PRIMARY KEY (entity, external_key)
+            );
             """
         )
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(pipeline)")}
@@ -112,6 +134,10 @@ def init_db() -> None:
             "last_run": "TEXT",
             "last_status": "TEXT",
             "last_detail": "TEXT",
+            "depends_on": "TEXT",
+            "cursor_column": "TEXT",
+            "enabled": "INTEGER NOT NULL DEFAULT 1",
+            "on_duplicate": "TEXT NOT NULL DEFAULT 'fail'",
         }
         for name, ddl in additions.items():
             if name not in columns:
@@ -159,34 +185,21 @@ def resolve_import_file(name: str) -> Path:
 
 def upload_attachment(path: Path) -> str:
     mime = "application/pdf" if path.suffix.lower() == ".pdf" else "application/octet-stream"
-    boundary = "----Nesso" + hashlib.sha256(path.name.encode()).hexdigest()[:16]
-    chunks = []
-    for field, value in (("role", "Attachment"), ("field", "file"), ("parentType", "Document")):
-        chunks.append(
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n".encode()
-        )
-    chunks.append(
-        (
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{path.name}\"\r\n"
-            f"Content-Type: {mime}\r\n\r\n"
-        ).encode()
-        + path.read_bytes()
-        + b"\r\n"
+    encoded = base64.b64encode(path.read_bytes()).decode()
+    status, result = espo_request(
+        "POST",
+        "/api/v1/Attachment",
+        {
+            "name": path.name,
+            "type": mime,
+            "role": "Attachment",
+            "parentType": "Document",
+            "field": "file",
+            "file": f"data:{mime};base64,{encoded}",
+        },
     )
-    chunks.append(f"--{boundary}--\r\n".encode())
-    token = __import__("base64").b64encode(f"{ESPO_USER}:{ESPO_PASSWORD}".encode()).decode()
-    req = urllib.request.Request(ESPO_BASE + "/api/v1/Attachment", data=b"".join(chunks), method="POST")
-    req.add_header("Espo-Authorization", token)
-    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    req.add_header("Accept", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as response:
-            result = json.loads(response.read().decode() or "{}")
-    except urllib.error.HTTPError as error:
-        raw = error.read().decode()
-        raise RuntimeError(f"caricamento file HTTP {error.code}: {raw}") from error
-    if not isinstance(result, dict) or not result.get("id"):
-        raise RuntimeError(f"caricamento file senza id: {result}")
+    if status not in (200, 201) or not isinstance(result, dict) or not result.get("id"):
+        raise RuntimeError(f"caricamento file HTTP {status}: {result}")
     return result["id"]
 
 
@@ -257,6 +270,74 @@ def ensure_field(entity: str, name: str, label: str, length: int) -> str:
     if status == 409 or "already exists" in message.lower() or "exists" in message.lower():
         return actual
     raise RuntimeError(f"{entity}.{name}: HTTP {status} {message}")
+
+
+FIELD_TYPES = {
+    "varchar", "text", "int", "float", "date", "datetime",
+    "bool", "enum", "currency", "email", "phone", "url",
+}
+
+
+def create_sheet(body: dict) -> dict:
+    singular = str(body.get("singular") or "").strip()
+    plural = str(body.get("plural") or "").strip()
+    name = create_espo_entity(singular, plural)
+    CATALOG["at"] = 0
+    return {"name": name, "label": singular}
+
+
+def add_sheet_field(entity: str, body: dict) -> dict:
+    label = str(body.get("label") or "").strip()
+    kind = str(body.get("type") or "").strip()
+    if not label:
+        raise RuntimeError("indica l'etichetta del campo")
+    if kind not in FIELD_TYPES:
+        raise RuntimeError("tipo di campo non riconosciuto")
+    if not scope_customizable(entity):
+        raise RuntimeError("questa scheda non accetta campi nuovi")
+    requested = camel_name(label)
+    payload: dict = {"name": requested, "type": kind, "label": label}
+    if kind == "varchar":
+        payload["maxLength"] = 180
+    if kind == "enum":
+        raw = body.get("options")
+        if isinstance(raw, str):
+            options = [line.strip() for line in raw.splitlines() if line.strip()]
+        elif isinstance(raw, list):
+            options = [str(item).strip() for item in raw if str(item).strip()]
+        else:
+            options = []
+        if not options:
+            raise RuntimeError("un elenco ha almeno un valore")
+        payload["options"] = options[:50]
+    if body.get("required") in (True, 1, "1", "true", "si", "sì"):
+        payload["required"] = True
+    status, result = espo_request("POST", f"/api/v1/Admin/fieldManager/{entity}", payload)
+    actual = publish_field_name(entity, requested)
+    if status not in (200, 201):
+        message = ""
+        if isinstance(result, dict):
+            message = str(result.get("message") or result.get("messageTranslation") or result)
+        if status == 409 or "already exists" in message.lower():
+            raise RuntimeError("questo campo c'è già")
+        raise RuntimeError(f"{entity}.{requested}: HTTP {status} {message}")
+    show_on_layout(entity, [actual])
+    CATALOG["at"] = 0
+    return {"name": actual, "label": label, "type": kind}
+
+
+CUSTOMIZABLE: dict[str, bool] = {}
+
+
+def scope_customizable(entity: str) -> bool:
+    if entity in CUSTOMIZABLE:
+        return CUSTOMIZABLE[entity]
+    code, result = espo_request(
+        "GET", "/api/v1/Metadata", query={"key": f"scopes.{entity}.customizable"}
+    )
+    ok = code == 200 and result is True
+    CUSTOMIZABLE[entity] = ok
+    return ok
 
 
 def links_of(entity: str) -> dict:
@@ -401,6 +482,50 @@ def prepare_espo() -> None:
         print("[motore] demo", error)
 
 
+IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+def safe_ident(name: str) -> str:
+    if not IDENT.match(name or ""):
+        raise RuntimeError("nome colonna non valido")
+    return name
+
+
+def split_cursor(value: str) -> tuple[str, str]:
+    if "\t" in (value or ""):
+        stamp, last_id = value.split("\t", 1)
+        return stamp, last_id
+    return value or "", ""
+
+
+def join_cursor(stamp: str, last_id: str) -> str:
+    if last_id:
+        return f"{stamp}\t{last_id}"
+    return stamp
+
+
+def normalize_phone(value: str) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("+"):
+        digits = re.sub(r"\D", "", raw)
+        return f"+{digits}" if digits else None
+    if raw.startswith("00"):
+        digits = re.sub(r"\D", "", raw[2:])
+        return f"+{digits}" if digits else None
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return None
+    if digits.startswith("39") and len(digits) >= 11:
+        return f"+{digits}"
+    if digits.startswith("0"):
+        return "+39" + digits[1:]
+    if len(digits) >= 9:
+        return "+39" + digits
+    return f"+{digits}"
+
+
 def apply_transform(rule: dict, payload: dict) -> str | None:
     transform = rule.get("transform") or "copy"
     if transform == "copy":
@@ -417,21 +542,61 @@ def apply_transform(rule: dict, payload: dict) -> str | None:
         text = str(payload.get(rule["from"]) or "").strip()
         parts = text.split(" ", 1)
         return parts[1] if len(parts) > 1 else None
+    if transform == "map":
+        value = payload.get(rule["from"])
+        if value is None or str(value).strip() == "":
+            return None
+        table = rule.get("valueMap") or {}
+        text = str(value).strip()
+        if text in table:
+            return str(table[text])
+        if "*" in table:
+            return str(table["*"])
+        return text
     raise RuntimeError(f"transform sconosciuto: {transform}")
 
 
-def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: str) -> dict:
+def create_foreign(entity: str, key_field: str, key: str) -> str:
+    body = {key_field: key}
+    if key_field != "name":
+        body["name"] = key[:255]
+    code, result = espo_request("POST", f"/api/v1/{entity}", body)
+    if code == 409:
+        found = find_by_key(entity, key_field, key)
+        if found:
+            return found
+    if code not in (200, 201) or not isinstance(result, dict) or "id" not in result:
+        raise RuntimeError(f"creazione {entity} HTTP {code}: {result}")
+    remember_key(entity, key, result["id"])
+    return result["id"]
+
+
+def resolve_lookup(rule: dict, value: str, dry: bool) -> str | None:
+    found = find_by_key(rule["lookupEntity"], rule["lookupBy"], value)
+    if found:
+        return found
+    policy = rule.get("onMiss") or "fail"
+    if policy == "skip":
+        return None
+    if policy == "create":
+        if dry:
+            return f"nuovo:{value}"
+        return create_foreign(rule["lookupEntity"], rule["lookupBy"], value)
+    raise RuntimeError(
+        f"nessun {rule['lookupEntity']} con {rule['lookupBy']} uguale a {value}"
+    )
+
+
+def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: str, dry: bool = False) -> dict:
     mapped: dict = {}
     for rule in mapping:
         if rule.get("transform") == "lookup":
             value = payload.get(rule["from"])
             if value is None or str(value).strip() == "":
                 continue
-            found = find_by_key(rule["lookupEntity"], rule["lookupBy"], str(value).strip())
+            found = resolve_lookup(rule, str(value).strip(), dry)
             if not found:
-                raise RuntimeError(
-                    f"nessun {rule['lookupEntity']} con {rule['lookupBy']} uguale a {value}"
-                )
+                continue
             mapped[rule["to"]] = found
             if rule.get("parentType"):
                 mapped["parentType"] = rule["parentType"]
@@ -443,27 +608,33 @@ def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: 
                 continue
             ids = []
             for part in parts:
-                found = find_by_key(rule["lookupEntity"], rule["lookupBy"], part)
-                if not found:
-                    raise RuntimeError(
-                        f"nessun {rule['lookupEntity']} con {rule['lookupBy']} uguale a {part}"
-                    )
-                ids.append(found)
-            mapped[rule["to"]] = ids
+                found = resolve_lookup(rule, part, dry)
+                if found:
+                    ids.append(found)
+            if ids:
+                mapped[rule["to"]] = ids
             continue
         if rule.get("transform") == "file":
             raw = str(payload.get(rule["from"]) or "").strip()
             if not raw:
                 continue
-            mapped[rule["to"]] = upload_attachment(resolve_import_file(raw))
+            if dry:
+                mapped[rule["to"]] = raw
+            else:
+                mapped[rule["to"]] = upload_attachment(resolve_import_file(raw))
             continue
         value = apply_transform(rule, payload)
-        if value is not None and value != "":
-            if rule.get("kind") == "bool":
-                mapped[rule["to"]] = str(value).strip().lower() in {"1", "true", "si", "sì", "yes"}
-            else:
-                mapped[rule["to"]] = value
-    if key:
+        if value is None or value == "":
+            continue
+        if rule.get("kind") == "bool":
+            mapped[rule["to"]] = str(value).strip().lower() in {"1", "true", "si", "sì", "yes"}
+        elif rule.get("kind") == "phone":
+            phone = normalize_phone(value)
+            if phone:
+                mapped[rule["to"]] = phone
+        else:
+            mapped[rule["to"]] = value
+    if key and key_field:
         mapped[key_field] = key
     return mapped
 
@@ -477,7 +648,38 @@ def render_key(template: str, payload: dict) -> str:
     return key
 
 
+def find_local(entity: str, key: str) -> str | None:
+    if not entity or not key:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT espo_id FROM chiave WHERE entity = ? AND external_key = ?",
+            (entity, key),
+        ).fetchone()
+    return row["espo_id"] if row else None
+
+
+def remember_key(entity: str, key: str, espo_id: str) -> None:
+    if not entity or not key or not espo_id:
+        return
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO chiave (entity, external_key, espo_id) VALUES (?, ?, ?)
+            ON CONFLICT(entity, external_key) DO UPDATE SET espo_id = excluded.espo_id
+            """,
+            (entity, key, espo_id),
+        )
+
+
 def find_by_key(entity: str, key_field: str, key: str):
+    local = find_local(entity, key)
+    if local:
+        return local
+    if not key_field:
+        return None
+    if key_field in ("cExternalKey", "externalKey") and not scope_customizable(entity):
+        return None
     code, result = espo_request(
         "GET",
         f"/api/v1/{entity}",
@@ -495,12 +697,22 @@ def find_by_key(entity: str, key_field: str, key: str):
     return rows[0]["id"] if rows else None
 
 
-def upsert(entity: str, mapped: dict, existing_id: str | None, key_field: str) -> tuple[str, str]:
+def upsert(
+    entity: str,
+    mapped: dict,
+    existing_id: str | None,
+    key_field: str,
+    on_duplicate: str = "fail",
+    identity: str | None = None,
+) -> tuple[str, str]:
+    token = identity or (mapped.get(key_field) if key_field else None)
     if existing_id:
         code, result = espo_request("PUT", f"/api/v1/{entity}/{existing_id}", mapped)
         action = "aggiornato"
     else:
-        found = find_by_key(entity, key_field, mapped[key_field])
+        found = find_local(entity, token) if token else None
+        if not found and key_field and token:
+            found = find_by_key(entity, key_field, token)
         if found:
             code, result = espo_request("PUT", f"/api/v1/{entity}/{found}", mapped)
             action = "aggiornato"
@@ -510,7 +722,8 @@ def upsert(entity: str, mapped: dict, existing_id: str | None, key_field: str) -
             action = "creato"
     if code == 409 and isinstance(result, list) and result and isinstance(result[0], dict):
         existing = result[0]
-        if existing.get(key_field) == mapped.get(key_field) and existing.get("id"):
+        same_key = existing.get(key_field) == mapped.get(key_field) and existing.get("id")
+        if existing.get("id") and (same_key or on_duplicate == "adopt"):
             code, result = espo_request("PUT", f"/api/v1/{entity}/{existing['id']}", mapped)
             action = "aggiornato"
         else:
@@ -518,6 +731,8 @@ def upsert(entity: str, mapped: dict, existing_id: str | None, key_field: str) -
             raise RuntimeError(f"Espo ha già un record simile ({label}) con un'altra chiave")
     if code not in (200, 201) or not isinstance(result, dict) or "id" not in result:
         raise RuntimeError(f"scrittura {entity} HTTP {code}: {result}")
+    if token:
+        remember_key(entity, token, result["id"])
     return result["id"], action
 
 
@@ -534,6 +749,7 @@ def ingest(pipeline_id: str, payload: dict) -> dict:
         key = render_key(row["key_template"], payload)
         mapping = json.loads(row["mapping_json"])
         key_field = row["key_field"] or "cExternalKey"
+        on_duplicate = row["on_duplicate"] if "on_duplicate" in row.keys() and row["on_duplicate"] else "fail"
         mapped = map_payload(mapping, payload, key, key_field)
         if scope_is_custom(row["espo_entity"]) and not mapped.get("name"):
             mapped["name"] = external_id
@@ -551,7 +767,12 @@ def ingest(pipeline_id: str, payload: dict) -> dict:
                 "entity": row["espo_entity"],
             }
         espo_id, action = upsert(
-            row["espo_entity"], mapped, previous["espo_id"] if previous else None, key_field
+            row["espo_entity"],
+            mapped,
+            previous["espo_id"] if previous else None,
+            key_field,
+            on_duplicate,
+            key,
         )
         conn.execute(
             """
@@ -572,62 +793,152 @@ def ingest(pipeline_id: str, payload: dict) -> dict:
         return {"status": action, "espoId": espo_id, "externalKey": key, "entity": row["espo_entity"]}
 
 
-def pull(pipeline_id: str) -> dict:
+def espo_page(entity: str, select: str, where: list[tuple[str, str, str]], order_by: str) -> list:
+    query = {"select": select, "maxSize": "50", "orderBy": order_by, "order": "asc"}
+    for index, (kind, attribute, value) in enumerate(where):
+        query[f"where[{index}][type]"] = kind
+        query[f"where[{index}][attribute]"] = attribute
+        query[f"where[{index}][value]"] = value
+    code, result = espo_request("GET", f"/api/v1/{entity}", query=query)
+    if code != 200 or not isinstance(result, dict):
+        raise RuntimeError(f"lettura Espo HTTP {code}: {result}")
+    return result.get("list") or []
+
+
+def save_cursor(pipeline_id: str, stamp: str, last_id: str) -> None:
+    if not stamp:
+        return
     with connect() as conn:
-        row = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
-        if row is None:
-            raise KeyError(pipeline_id)
-        if row["direction"] != "out":
-            raise RuntimeError("la pipeline non è in uscita")
+        conn.execute(
+            """
+            INSERT INTO cursor_state (pipeline_id, cursor_value) VALUES (?, ?)
+            ON CONFLICT(pipeline_id) DO UPDATE SET cursor_value = excluded.cursor_value
+            """,
+            (pipeline_id, join_cursor(stamp, last_id)),
+        )
+
+
+def load_cursor(pipeline_id: str) -> str:
+    with connect() as conn:
         cursor = conn.execute(
             "SELECT cursor_value FROM cursor_state WHERE pipeline_id = ?",
             (pipeline_id,),
         ).fetchone()
-        cursor_value = cursor["cursor_value"] if cursor else "1970-01-01 00:00:00"
-        mapping = json.loads(row["mapping_json"])
-        select = ",".join(sorted({rule["from"] for rule in mapping}))
-        code, result = espo_request(
-            "GET",
-            f"/api/v1/{row['espo_entity']}",
-            query={
-                "select": select,
-                "maxSize": "50",
-                "orderBy": "modifiedAt",
-                "order": "asc",
-                "where[0][type]": "after",
-                "where[0][attribute]": "modifiedAt",
-                "where[0][value]": cursor_value,
-            },
+    return cursor["cursor_value"] if cursor else "1970-01-01 00:00:00"
+
+
+def collect_changes(entity: str, select: str, cursor_value: str, limit: int) -> list:
+    stamp, last_id = split_cursor(cursor_value or "1970-01-01 00:00:00")
+    records = []
+    seen = set()
+
+    def add(items: list) -> bool:
+        for item in items:
+            espo_id = item.get("id")
+            if not espo_id or espo_id in seen:
+                continue
+            seen.add(espo_id)
+            records.append(item)
+            if len(records) >= limit:
+                return True
+        return False
+
+    if stamp and stamp > "1970-01-01 00:00:00":
+        page_id = last_id
+        while len(records) < limit:
+            rows = espo_page(entity, select, [
+                ("equals", "modifiedAt", stamp),
+                ("greaterThan", "id", page_id or ""),
+            ], "id")
+            if not rows:
+                break
+            if add(rows):
+                return records
+            page_id = rows[-1].get("id") or page_id
+            if len(rows) < 50:
+                break
+    guard = 0
+    while len(records) < limit and guard < 40:
+        guard += 1
+        page = espo_page(entity, select, [("after", "modifiedAt", stamp)], "modifiedAt")
+        if not page:
+            break
+        boundary = page[-1].get("modifiedAt") or ""
+        earlier = [item for item in page if (item.get("modifiedAt") or "") < boundary]
+        if earlier and add(earlier):
+            return records
+        if not boundary:
+            add(page)
+            break
+        page_id = ""
+        while len(records) < limit:
+            rows = espo_page(entity, select, [
+                ("equals", "modifiedAt", boundary),
+                ("greaterThan", "id", page_id or ""),
+            ], "id")
+            if not rows:
+                break
+            if add(rows):
+                return records
+            page_id = rows[-1].get("id") or page_id
+            if len(rows) < 50:
+                break
+        stamp = boundary
+        if len(page) < 50:
+            break
+    records.sort(key=lambda item: (item.get("modifiedAt") or "", item.get("id") or ""))
+    return records
+
+
+def outbound_rows(pipeline_id: str, limit: int = 1000) -> list[dict]:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+    if row is None:
+        raise KeyError(pipeline_id)
+    if row["direction"] != "out":
+        raise RuntimeError("la pipeline non è in uscita")
+    mapping = json.loads(row["mapping_json"])
+    select = ",".join(sorted({rule["from"] for rule in mapping} | {"id", "modifiedAt"}))
+    items = collect_changes(row["espo_entity"], select, load_cursor(pipeline_id), limit)
+    items.sort(key=lambda item: (item.get("modifiedAt") or "", item.get("id") or ""))
+    records = []
+    for item in items:
+        outgoing = {}
+        for rule in mapping:
+            value = item.get(rule["from"])
+            if value is not None:
+                outgoing[rule["to"]] = value
+        records.append({
+            "espoId": item.get("id"),
+            "modifiedAt": item.get("modifiedAt") or "",
+            "payload": outgoing,
+        })
+    return records
+
+
+def remember_sink(pipeline_id: str, espo_id: str, payload: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO sink_item (pipeline_id, espo_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
+            (pipeline_id, espo_id, json.dumps(payload, ensure_ascii=False), time.strftime("%Y-%m-%d %H:%M:%S")),
         )
-        if code != 200 or not isinstance(result, dict):
-            raise RuntimeError(f"lettura Espo HTTP {code}: {result}")
-        exported = 0
-        records = []
-        last = cursor_value
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        for item in result.get("list") or []:
-            outgoing = {}
-            for rule in mapping:
-                value = item.get(rule["from"])
-                if value is not None:
-                    outgoing[rule["to"]] = value
-            conn.execute(
-                "INSERT INTO sink_item (pipeline_id, espo_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
-                (pipeline_id, item.get("id"), json.dumps(outgoing, ensure_ascii=False), now),
-            )
-            records.append(outgoing)
-            if item.get("modifiedAt") and item["modifiedAt"] > last:
-                last = item["modifiedAt"]
-            exported += 1
-        if exported:
-            conn.execute(
-                """
-                INSERT INTO cursor_state (pipeline_id, cursor_value) VALUES (?, ?)
-                ON CONFLICT(pipeline_id) DO UPDATE SET cursor_value = excluded.cursor_value
-                """,
-                (pipeline_id, last),
-            )
-        return {"exported": exported, "cursor": last, "total": result.get("total"), "records": records}
+
+
+def pull(pipeline_id: str) -> dict:
+    records = outbound_rows(pipeline_id)
+    last = None
+    for item in records:
+        remember_sink(pipeline_id, item["espoId"], item["payload"])
+        if item["modifiedAt"]:
+            last = item
+    if last:
+        save_cursor(pipeline_id, last["modifiedAt"], last["espoId"])
+    cursor = join_cursor(last["modifiedAt"], last["espoId"]) if last else load_cursor(pipeline_id)
+    return {
+        "exported": len(records),
+        "cursor": cursor,
+        "records": [item["payload"] for item in records],
+    }
 
 
 def snapshot() -> dict:
@@ -639,6 +950,8 @@ def snapshot() -> dict:
         sink = [dict(row) for row in conn.execute("SELECT * FROM sink_item ORDER BY id DESC LIMIT 20")]
         connections = [public_connection(row) for row in conn.execute("SELECT * FROM connection ORDER BY name")]
         deliveries = [dict(row) for row in conn.execute("SELECT * FROM delivery ORDER BY id DESC LIMIT 20")]
+        rejects = [dict(row) for row in conn.execute("SELECT * FROM scarto ORDER BY id DESC LIMIT 30")]
+        runs = [dict(row) for row in conn.execute("SELECT * FROM run_log ORDER BY id DESC LIMIT 20")]
     return {
         "state": STATE,
         "espoPublicUrl": ESPO_PUBLIC,
@@ -648,6 +961,8 @@ def snapshot() -> dict:
         "queue": queue,
         "sink": sink,
         "deliveries": deliveries,
+        "rejects": rejects,
+        "runs": runs,
     }
 
 
@@ -756,11 +1071,27 @@ def load_catalog() -> list[dict]:
             if field_name in ("cExternalKey", "externalKey"):
                 usable.append({"name": field_name, "label": "Chiave esterna", "type": "varchar"})
                 continue
-            usable.append({
+            field = {
                 "name": field_name,
                 "label": field_labels.get(field_name) or global_fields.get(field_name) or field_name,
                 "type": field_def.get("type"),
-            })
+            }
+            if field_def.get("type") in ("enum", "multiEnum") and isinstance(field_def.get("options"), list):
+                field["options"] = field_def.get("options")
+            usable.append(field)
+        seen = {item["name"] for item in usable}
+        for link_name, link in links.items():
+            if link_name in seen or not isinstance(link, dict):
+                continue
+            if link.get("type") == "hasMany" and link.get("entity"):
+                label = link_labels.get(link_name) or link_name
+                usable.append({
+                    "name": link_name,
+                    "idName": link_name + "Ids",
+                    "label": f"{label} (più collegamenti)",
+                    "type": "linkMultiple",
+                    "foreignEntity": link.get("entity"),
+                })
         usable.sort(key=lambda item: item["label"].lower())
         entities.append({
             "name": name,
@@ -781,11 +1112,46 @@ def prepare_lookup(catalog: list[dict], foreign: str, lookup_by: str) -> tuple[d
     lookup_by = lookup_by or foreign_meta["keyField"]
     known = {field["name"] for field in foreign_meta["fields"]}
     if lookup_by not in known:
-        if lookup_by == foreign_meta["keyField"]:
+        if lookup_by == foreign_meta["keyField"] and scope_customizable(foreign):
             ensure_field(foreign, "externalKey", "Chiave esterna", 180)
-        else:
+        elif lookup_by != foreign_meta["keyField"]:
             raise RuntimeError("campo di riconoscimento non trovato sulla scheda collegata")
     return foreign_meta, lookup_by
+
+
+def miss_policy(rule: dict) -> str:
+    value = rule.get("onMiss") or "fail"
+    if value not in ("fail", "skip", "create"):
+        raise RuntimeError("scegli se scartare la riga, lasciare il legame vuoto o creare il record")
+    return value
+
+
+def kept_transform(rule: dict) -> str:
+    raw = str(rule.get("transform") or "copy")
+    if raw.startswith("const:"):
+        if len(raw) > 400:
+            raise RuntimeError("valore fisso troppo lungo")
+        return raw
+    if raw in ("copy", "split_first", "split_last", "map", "file"):
+        return raw
+    raise RuntimeError("trasformazione non riconosciuta")
+
+
+def kept_map(rule: dict) -> dict | None:
+    raw = rule.get("valueMap")
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise RuntimeError("la mappa dei valori non è valida")
+    clean = {}
+    for key, value in list(raw.items())[:80]:
+        clean[str(key)[:80]] = str(value)[:180]
+    return clean
+
+
+def with_policy(rule: dict, compiled: dict) -> dict:
+    compiled["onMiss"] = miss_policy(rule)
+    return compiled
 
 
 def compile_rules(entity: str, rules: list, creating: bool, back_label: str | None = None) -> list[dict]:
@@ -800,20 +1166,25 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
         source = str(rule.get("from") or "").strip()
         target = str(rule.get("to") or "").strip()
         role = rule.get("role") or "field"
-        if not source or not target:
+        transform = kept_transform(rule)
+        if transform.startswith("const:"):
+            source = source or "_const"
+        if not source or (not target and not transform.startswith("const:")):
+            continue
+        if not target:
             continue
         if role in ("link", "links", "parent"):
             foreign = str(rule.get("lookupEntity") or "").strip()
             foreign_meta, lookup_by = prepare_lookup(catalog, foreign, str(rule.get("lookupBy") or "").strip())
             if role == "parent":
-                compiled.append({
+                compiled.append(with_policy(rule, {
                     "from": source,
                     "to": "parentId",
                     "transform": "lookup",
                     "lookupEntity": foreign,
                     "lookupBy": lookup_by,
                     "parentType": foreign,
-                })
+                }))
                 continue
             if role == "links":
                 chosen = by_name.get(target)
@@ -825,34 +1196,40 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
                     if len(matches) != 1:
                         raise RuntimeError("indica il collegamento multiplo verso " + foreign)
                     chosen = matches[0]
-                compiled.append({
+                compiled.append(with_policy(rule, {
                     "from": source,
                     "to": chosen["idName"],
                     "transform": "lookups",
                     "lookupEntity": foreign,
                     "lookupBy": lookup_by,
-                })
+                }))
                 continue
             existing = by_name.get(target)
             if existing and existing.get("type") == "link" and existing.get("foreignEntity") == foreign:
                 link_name = target
             else:
-                link_name = create_lookup(entity, foreign, foreign_meta["label"], back_label)
-            compiled.append({
+                matches = [
+                    field for field in meta["fields"]
+                    if field.get("type") == "link" and field.get("foreignEntity") == foreign
+                ]
+                if len(matches) == 1:
+                    link_name = matches[0]["name"]
+                else:
+                    link_name = create_lookup(entity, foreign, foreign_meta["label"], back_label)
+            compiled.append(with_policy(rule, {
                 "from": source,
                 "to": link_name + "Id",
                 "transform": "lookup",
                 "lookupEntity": foreign,
                 "lookupBy": lookup_by,
-            })
+            }))
             layout_names.append(link_name)
             continue
         chosen = by_name.get(target)
-        if chosen and chosen.get("type") == "file":
+        if transform == "file" or (chosen and chosen.get("type") == "file"):
+            if not chosen or chosen.get("type") != "file":
+                raise RuntimeError("questo campo non è un file")
             compiled.append({"from": source, "to": chosen["idName"], "transform": "file"})
-            continue
-        if chosen and chosen.get("type") == "bool":
-            compiled.append({"from": source, "to": target, "transform": "copy", "kind": "bool"})
             continue
         if chosen and chosen.get("type") in ("linkMultiple", "linkParent"):
             raise RuntimeError("questo collegamento va indicato come collegamento a più record, o come attività")
@@ -864,7 +1241,15 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
             continue
         if target not in by_name or by_name[target].get("type") == "link":
             raise RuntimeError("campi Espo non riconosciuti: " + target)
-        compiled.append({"from": source, "to": target, "transform": "copy"})
+        item = {"from": source, "to": target, "transform": transform}
+        if chosen and chosen.get("type") == "bool":
+            item["kind"] = "bool"
+        elif chosen and chosen.get("type") == "phone":
+            item["kind"] = "phone"
+        mapped_values = kept_map(rule)
+        if transform == "map" and mapped_values:
+            item["valueMap"] = mapped_values
+        compiled.append(item)
     if not compiled:
         raise RuntimeError("abbina almeno un campo")
     show_on_layout(entity, layout_names)
@@ -904,8 +1289,11 @@ def save_pipeline(body: dict) -> dict:
         meta = next((item for item in catalog if item["name"] == entity), None)
         if meta is None:
             raise RuntimeError("scheda Espo non disponibile")
-        key_field = meta["keyField"]
-        ensure_field(entity, "externalKey", "Chiave esterna", 180)
+        if scope_customizable(entity):
+            ensure_field(entity, "externalKey", "Chiave esterna", 180)
+            key_field = meta["keyField"]
+        else:
+            key_field = ""
         CATALOG["at"] = 0
     else:
         clean = []
@@ -929,6 +1317,13 @@ def save_pipeline(body: dict) -> dict:
     if schedule not in (0, 5, 15, 60):
         raise RuntimeError("la cadenza può essere manuale, 5, 15 o 60 minuti")
     connection_id = str(body.get("connectionId") or "").strip()
+    on_duplicate = str(body.get("onDuplicate") or "fail")
+    if on_duplicate not in ("fail", "adopt"):
+        raise RuntimeError("sul duplicato si scarta oppure si aggiorna il record già presente")
+    cursor_column = str(body.get("cursorColumn") or "").strip()
+    if cursor_column:
+        safe_ident(cursor_column)
+    depends_on = str(body.get("dependsOn") or "").strip()
     with connect() as conn:
         if connection_id:
             link = conn.execute("SELECT * FROM connection WHERE id = ?", (connection_id,)).fetchone()
@@ -940,9 +1335,10 @@ def save_pipeline(body: dict) -> dict:
         else:
             connection_id = None
         pipeline_id = str(body.get("id") or "").strip()
+        previous = None
         if pipeline_id:
-            existing = conn.execute("SELECT id FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
-            if existing is None:
+            previous = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+            if previous is None:
                 raise RuntimeError("integrazione non trovata")
         else:
             pipeline_id = slugify(name)
@@ -951,14 +1347,42 @@ def save_pipeline(body: dict) -> dict:
             while conn.execute("SELECT 1 FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone():
                 pipeline_id = f"{base}-{suffix}"
                 suffix += 1
-        key_template = f"{pipeline_id}:{{{external_id_field}}}" if direction == "in" else ""
+        if "enabled" in body:
+            enabled = 0 if body.get("enabled") in (False, 0, "0") else 1
+        elif previous is not None and previous["enabled"] is not None:
+            enabled = previous["enabled"]
+        else:
+            enabled = 1
+        if "dependsOn" not in body and previous is not None:
+            depends_on = previous["depends_on"] or ""
+        if "cursorColumn" not in body and previous is not None:
+            cursor_column = previous["cursor_column"] or ""
+        if "onDuplicate" not in body and previous is not None and previous["on_duplicate"]:
+            on_duplicate = previous["on_duplicate"]
+        if depends_on:
+            if depends_on == pipeline_id:
+                raise RuntimeError("un'integrazione non può aspettare sé stessa")
+            seen = {pipeline_id}
+            current = depends_on
+            while current:
+                if current in seen:
+                    raise RuntimeError("le integrazioni si aspettano in cerchio")
+                seen.add(current)
+                parent = conn.execute("SELECT depends_on FROM pipeline WHERE id = ?", (current,)).fetchone()
+                if parent is None:
+                    raise RuntimeError("l'integrazione da eseguire prima non esiste")
+                current = parent["depends_on"]
+        if direction == "in" and previous is not None and previous["external_id_field"] == external_id_field and previous["key_template"]:
+            key_template = previous["key_template"]
+        else:
+            key_template = f"{pipeline_id}:{{{external_id_field}}}" if direction == "in" else ""
         if direction == "out":
             external_id_field = external_id_field or "id"
         conn.execute(
             """
             INSERT INTO pipeline
-            (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, schedule_minutes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, schedule_minutes, depends_on, cursor_column, enabled, on_duplicate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 direction = excluded.direction,
@@ -968,11 +1392,16 @@ def save_pipeline(body: dict) -> dict:
                 mapping_json = excluded.mapping_json,
                 key_field = excluded.key_field,
                 connection_id = excluded.connection_id,
-                schedule_minutes = excluded.schedule_minutes
+                schedule_minutes = excluded.schedule_minutes,
+                depends_on = excluded.depends_on,
+                cursor_column = excluded.cursor_column,
+                enabled = excluded.enabled,
+                on_duplicate = excluded.on_duplicate
             """,
             (
                 pipeline_id, name, direction, entity, external_id_field, key_template,
                 json.dumps(clean, ensure_ascii=False), key_field, connection_id, schedule,
+                depends_on or None, cursor_column or None, enabled, on_duplicate,
             ),
         )
     return {"id": pipeline_id, "name": name, "direction": direction, "espoEntity": entity}
@@ -986,6 +1415,8 @@ def delete_pipeline(pipeline_id: str) -> dict:
         conn.execute("DELETE FROM queue_item WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM sink_item WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM cursor_state WHERE pipeline_id = ?", (pipeline_id,))
+        conn.execute("DELETE FROM scarto WHERE pipeline_id = ?", (pipeline_id,))
+        conn.execute("DELETE FROM run_log WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM pipeline WHERE id = ?", (pipeline_id,))
     return {"deleted": pipeline_id}
 
@@ -995,6 +1426,12 @@ def public_connection(row: sqlite3.Row) -> dict:
     if config.get("password"):
         config["hasPassword"] = True
         config["password"] = ""
+    if config.get("token"):
+        config["hasToken"] = True
+        config["token"] = ""
+    if config.get("headerValue"):
+        config["hasHeader"] = True
+        config["headerValue"] = ""
     item = {"id": row["id"], "name": row["name"], "kind": row["kind"], "config": config}
     if row["kind"] == "webhook":
         item["url"] = f"{PUBLIC_BASE}/hook/{row['id']}/{row['token']}"
@@ -1002,6 +1439,7 @@ def public_connection(row: sqlite3.Row) -> dict:
         item["inboxUrl"] = f"{PUBLIC_BASE}/inbox/{row['id']}/{row['token']}"
     if row["kind"] == "csv":
         item["folder"] = str(SCAMBIO / row["id"])
+        config["columns"] = csv_headers(row["id"])
     return item
 
 
@@ -1035,11 +1473,84 @@ def remember_delivery(pipeline_id: str | None, connection_id: str | None, payloa
 
 
 def mark_run(pipeline_id: str, status: str, detail: str) -> None:
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    text = detail[:500]
     with connect() as conn:
         conn.execute(
             "UPDATE pipeline SET last_run = ?, last_status = ?, last_detail = ? WHERE id = ?",
-            (time.strftime("%Y-%m-%d %H:%M:%S"), status, detail[:500], pipeline_id),
+            (now, status, text, pipeline_id),
         )
+        conn.execute(
+            "INSERT INTO run_log (pipeline_id, status, detail, created_at) VALUES (?, ?, ?, ?)",
+            (pipeline_id, status, text, now),
+        )
+
+
+def remember_reject(pipeline_id: str, external_id: str, payload, detail: str) -> None:
+    if not isinstance(payload, dict):
+        payload = {"valore": str(payload)[:500]}
+    raw = json.dumps(payload, ensure_ascii=False, default=str)
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO scarto (pipeline_id, external_id, payload_json, detail, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                pipeline_id,
+                (external_id or "")[:180],
+                raw[:4000],
+                detail[:500],
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+
+
+def ingest_row(pipeline_id: str, payload: dict) -> dict:
+    try:
+        return ingest(pipeline_id, payload)
+    except Exception as error:
+        external = ""
+        if isinstance(payload, dict):
+            with connect() as conn:
+                row = conn.execute(
+                    "SELECT external_id_field FROM pipeline WHERE id = ?",
+                    (pipeline_id,),
+                ).fetchone()
+            if row is not None:
+                external = str(payload.get(row["external_id_field"]) or "")
+        remember_reject(pipeline_id, external, payload, str(error))
+        return {"status": "scartato", "detail": str(error), "externalKey": external}
+
+
+def fresh_counts() -> dict:
+    return {"created": 0, "updated": 0, "unchanged": 0, "failed": 0, "first": ""}
+
+
+def tally(item: dict, counts: dict) -> None:
+    status = item.get("status")
+    if status == "creato":
+        counts["created"] += 1
+    elif status == "aggiornato":
+        counts["updated"] += 1
+    elif status == "invariato":
+        counts["unchanged"] += 1
+    else:
+        counts["failed"] += 1
+        if not counts["first"]:
+            counts["first"] = item.get("detail") or ""
+
+
+def finish_counts(prefix: str, counts: dict) -> tuple[str, str]:
+    detail = (
+        f"{prefix}, {counts['created']} create, {counts['updated']} aggiornate, "
+        f"{counts['unchanged']} invariate, {counts['failed']} scartate"
+    )
+    if counts["first"]:
+        detail += ". " + counts["first"]
+    worked = counts["created"] or counts["updated"] or counts["unchanged"]
+    status = "errore" if counts["failed"] and not worked else "ok"
+    return status, detail
 
 
 def save_connection(body: dict) -> dict:
@@ -1063,7 +1574,21 @@ def save_connection(body: dict) -> dict:
         url = str(config.get("url") or "").strip()
         if url and not url.startswith(("http://", "https://")):
             raise RuntimeError("l'indirizzo di destinazione deve essere http o https")
-        config = {"url": url}
+        auth = str(config.get("auth") or "none")
+        if auth not in ("none", "bearer", "basic", "header"):
+            raise RuntimeError("autenticazione della destinazione non riconosciuta")
+        header_name = str(config.get("headerName") or "").strip()
+        if auth == "header" and not re.match(r"^[A-Za-z0-9-]{1,40}$", header_name):
+            raise RuntimeError("nome intestazione non valido")
+        config = {
+            "url": url,
+            "auth": auth,
+            "token": str(config.get("token") or ""),
+            "user": str(config.get("user") or "").strip(),
+            "password": str(config.get("password") or ""),
+            "headerName": header_name,
+            "headerValue": str(config.get("headerValue") or ""),
+        }
     if kind == "csv":
         config = {}
     if kind == "webhook":
@@ -1078,6 +1603,13 @@ def save_connection(body: dict) -> dict:
             previous = json.loads(current["config_json"])
             if kind == "database" and not str(config.get("password") or "") and previous.get("password"):
                 config["password"] = previous["password"]
+            if kind == "http":
+                if not config.get("token") and previous.get("token"):
+                    config["token"] = previous["token"]
+                if not config.get("password") and previous.get("password"):
+                    config["password"] = previous["password"]
+                if not config.get("headerValue") and previous.get("headerValue"):
+                    config["headerValue"] = previous["headerValue"]
         else:
             connection_id = slugify(name)
             suffix = 2
@@ -1088,6 +1620,7 @@ def save_connection(body: dict) -> dict:
             token = secrets.token_urlsafe(24)
         if kind == "database":
             columns = read_database(config, sample=1)
+            config["columns"] = list(columns[0].keys()) if columns else []
             config_note = columns
         else:
             config_note = []
@@ -1118,12 +1651,32 @@ def save_connection(body: dict) -> dict:
     return result
 
 
-def read_database(config: dict, sample: int | None = None) -> list[dict]:
+def read_database(
+    config: dict,
+    sample: int | None = None,
+    cursor_column: str | None = None,
+    cursor_value: str | None = None,
+    id_column: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
     import pymysql
 
     sql = validate_select(config["query"])
-    limit = 5 if sample else 500
-    wrapped = f"SELECT * FROM ({sql}) AS sorgente LIMIT {limit}"
+    if limit is None:
+        limit = 5 if sample else 500
+    where = ""
+    order = ""
+    params: list[str] = []
+    if cursor_column and id_column and not sample:
+        column = safe_ident(cursor_column)
+        identity = safe_ident(id_column)
+        order = f"ORDER BY `{column}`, `{identity}`"
+        stamp, last_id = split_cursor(cursor_value or "")
+        if stamp:
+            where = f"WHERE `{column}` > %s OR (`{column}` = %s AND `{identity}` > %s)"
+            params = [stamp, stamp, last_id]
+    source = sql.replace("%", "%%") if params else sql
+    wrapped = f"SELECT * FROM ({source}) AS sorgente {where} {order} LIMIT {int(limit)}"
     connection = pymysql.connect(
         host=config["host"],
         port=int(config.get("port") or 3306),
@@ -1136,7 +1689,7 @@ def read_database(config: dict, sample: int | None = None) -> list[dict]:
     )
     try:
         with connection.cursor() as cursor:
-            cursor.execute(wrapped)
+            cursor.execute(wrapped, params or None)
             raw_rows = cursor.fetchall()
     finally:
         connection.close()
@@ -1146,26 +1699,64 @@ def read_database(config: dict, sample: int | None = None) -> list[dict]:
     ]
 
 
-def read_csv_folder(connection_id: str) -> list[tuple[str, dict]]:
+def csv_delimiter(header: str) -> str:
+    return ";" if header.count(";") > header.count(",") else ","
+
+
+def csv_headers(connection_id: str) -> list[str]:
+    folder = SCAMBIO / connection_id
+    if not folder.is_dir():
+        return []
+    for path in sorted(folder.glob("*.csv")):
+        try:
+            header = path.read_text(encoding="utf-8-sig").splitlines()[0]
+        except (OSError, IndexError):
+            return []
+        row = next(csv.reader([header], delimiter=csv_delimiter(header)), [])
+        return [name.strip() for name in row if name and name.strip()]
+    return []
+
+
+def read_csv_folder(connection_id: str) -> list[tuple[Path, dict]]:
     folder = SCAMBIO / connection_id
     folder.mkdir(parents=True, exist_ok=True)
     done = folder / "elaborati"
     done.mkdir(exist_ok=True)
     found = []
     for path in sorted(folder.glob("*.csv")):
+        header = path.read_text(encoding="utf-8-sig").splitlines()[:1]
+        delimiter = csv_delimiter(header[0] if header else "")
         with path.open(encoding="utf-8-sig", newline="") as handle:
-            for row in csv.DictReader(handle):
+            for row in csv.DictReader(handle, delimiter=delimiter):
                 found.append((path, {key: value for key, value in row.items() if key}))
     return found
 
 
-def post_json(url: str, payload: dict) -> None:
+def destination_headers(config: dict) -> dict:
+    headers = {}
+    auth = config.get("auth") or "none"
+    if auth == "bearer" and config.get("token"):
+        headers["Authorization"] = "Bearer " + str(config["token"])
+    elif auth == "basic" and config.get("user"):
+        raw = f"{config.get('user')}:{config.get('password') or ''}".encode()
+        headers["Authorization"] = "Basic " + __import__("base64").b64encode(raw).decode()
+    elif auth == "header" and config.get("headerName") and config.get("headerValue"):
+        headers[str(config["headerName"])] = str(config["headerValue"])
+    return headers
+
+
+def post_json(url: str, payload: dict, headers: dict | None = None) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode()
     request = urllib.request.Request(url, data=data, method="POST")
     request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request, timeout=20) as response:
-        if response.status >= 300:
-            raise RuntimeError(f"destinazione HTTP {response.status}")
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"destinazione HTTP {response.status}")
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"destinazione HTTP {error.code}") from error
 
 
 def accept_hook(connection_id: str, token: str, body: dict | list) -> dict:
@@ -1174,10 +1765,17 @@ def accept_hook(connection_id: str, token: str, body: dict | list) -> dict:
         pipelines = [
             item["id"]
             for item in conn.execute(
-                "SELECT id FROM pipeline WHERE connection_id = ? AND direction = 'in'",
+                """
+                SELECT id FROM pipeline
+                WHERE connection_id = ? AND direction = 'in' AND COALESCE(enabled, 1) = 1
+                """,
                 (connection_id,),
             )
         ]
+        any_pipeline = conn.execute(
+            "SELECT 1 FROM pipeline WHERE connection_id = ? AND direction = 'in'",
+            (connection_id,),
+        ).fetchone()
     if row is None or row["kind"] != "webhook" or not hmac.compare_digest(row["token"], token):
         raise PermissionError("collegamento non valido")
     if isinstance(body, dict) and isinstance(body.get("records"), list):
@@ -1189,16 +1787,25 @@ def accept_hook(connection_id: str, token: str, body: dict | list) -> dict:
     else:
         raise RuntimeError("il corpo deve essere un oggetto o un elenco")
     if not pipelines:
+        if any_pipeline:
+            raise RuntimeError("le integrazioni di questo collegamento sono in pausa")
         raise RuntimeError("nessuna integrazione usa questo collegamento")
     done = []
+    failed = 0
     for pipeline_id in pipelines:
+        counts = fresh_counts()
         for record in records:
             if not isinstance(record, dict):
+                remember_reject(pipeline_id, "", {"valore": str(record)[:300]}, "la riga non è un oggetto")
+                tally({"status": "scartato", "detail": "la riga non è un oggetto"}, counts)
                 continue
-            result = ingest(pipeline_id, record)
-            done.append(result)
-        mark_run(pipeline_id, "ok", f"{len(records)} record ricevuti via webhook")
-    return {"accepted": len(done), "results": done}
+            item = ingest_row(pipeline_id, record)
+            tally(item, counts)
+            done.append(item)
+        failed += counts["failed"]
+        status, detail = finish_counts(f"{len(records)} record via webhook", counts)
+        mark_run(pipeline_id, status, detail)
+    return {"accepted": len(done) - failed, "failed": failed, "results": done}
 
 
 def accept_inbox(connection_id: str, token: str, body: dict) -> dict:
@@ -1210,82 +1817,273 @@ def accept_inbox(connection_id: str, token: str, body: dict) -> dict:
     return {"stored": True}
 
 
-def run_pipeline(pipeline_id: str) -> dict:
+def pipeline_due(row: sqlite3.Row, now: float | None = None) -> bool:
+    if row["enabled"] == 0:
+        return False
+    if not row["schedule_minutes"]:
+        return not row["last_run"]
+    if not row["last_run"]:
+        return True
+    moment = now if now is not None else time.time()
+    previous = time.mktime(time.strptime(row["last_run"], "%Y-%m-%d %H:%M:%S"))
+    return moment - previous >= row["schedule_minutes"] * 60
+
+
+def preview_row(pipeline: sqlite3.Row, payload: dict) -> dict:
+    external = str(payload.get(pipeline["external_id_field"]) or "").strip()
+    if pipeline["direction"] == "in" and not external:
+        raise RuntimeError(f"manca il campo {pipeline['external_id_field']}")
+    key = render_key(pipeline["key_template"], payload) if pipeline["direction"] == "in" else None
+    mapped = map_payload(
+        json.loads(pipeline["mapping_json"]),
+        payload,
+        key,
+        pipeline["key_field"] or "cExternalKey",
+        dry=True,
+    )
+    return {"externalId": external, "mapped": mapped}
+
+
+def dry_run(pipeline_id: str) -> dict:
+    with connect() as conn:
+        pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+        link = None
+        if pipeline and pipeline["connection_id"]:
+            link = conn.execute("SELECT * FROM connection WHERE id = ?", (pipeline["connection_id"],)).fetchone()
+    if pipeline is None:
+        raise KeyError(pipeline_id)
+    if pipeline["direction"] == "out":
+        rows = outbound_rows(pipeline_id, limit=5)
+        return {"rows": [{"espoId": item["espoId"], "mapped": item["payload"]} for item in rows]}
+    if link is None:
+        raise RuntimeError("collega un sistema esterno prima della prova")
+    if link["kind"] == "webhook":
+        return {"detail": "Il webhook non ha righe da leggere. L'anteprima si fa quando il sistema esterno chiama.", "rows": []}
+    config = json.loads(link["config_json"])
+    if link["kind"] == "database":
+        source = read_database(
+            config,
+            limit=5,
+            cursor_column=pipeline["cursor_column"],
+            cursor_value=load_cursor(pipeline_id) if pipeline["cursor_column"] else None,
+            id_column=pipeline["external_id_field"] if pipeline["cursor_column"] else None,
+        )
+        payloads = source
+    elif link["kind"] == "csv":
+        payloads = [row for _path, row in read_csv_folder(link["id"])[:5]]
+    else:
+        raise RuntimeError("questo collegamento non ha una prova a secco")
+    rows = []
+    for payload in payloads:
+        try:
+            rows.append(preview_row(pipeline, payload))
+        except Exception as error:
+            rows.append({"status": "scartato", "detail": str(error)})
+    return {"rows": rows}
+
+
+def execute_pipeline(pipeline_id: str) -> dict:
+    with connect() as conn:
+        pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+        link = None
+        if pipeline and pipeline["connection_id"]:
+            link = conn.execute(
+                "SELECT * FROM connection WHERE id = ?",
+                (pipeline["connection_id"],),
+            ).fetchone()
+    if pipeline is None:
+        raise KeyError(pipeline_id)
+    if link is None:
+        if pipeline["direction"] == "out":
+            result = pull(pipeline_id)
+            mark_run(pipeline_id, "ok", f"letti {result['exported']} record, senza destinazione")
+            return result
+        raise RuntimeError("collega un sistema esterno prima di eseguire")
+    config = json.loads(link["config_json"])
+    if link["kind"] == "webhook":
+        mark_run(pipeline_id, "ok", "in attesa che il sistema esterno chiami l'indirizzo")
+        return {"waiting": True, "url": f"{PUBLIC_BASE}/hook/{link['id']}/{link['token']}"}
+    if link["kind"] == "database":
+        rows = read_database(
+            config,
+            cursor_column=pipeline["cursor_column"],
+            cursor_value=load_cursor(pipeline_id) if pipeline["cursor_column"] else None,
+            id_column=pipeline["external_id_field"] if pipeline["cursor_column"] else None,
+        )
+        counts = fresh_counts()
+        for row in rows:
+            tally(ingest_row(pipeline_id, row), counts)
+        if pipeline["cursor_column"] and rows:
+            last = rows[-1]
+            stamp = str(last.get(pipeline["cursor_column"]) or "")
+            identity = str(last.get(pipeline["external_id_field"]) or "")
+            if stamp:
+                save_cursor(pipeline_id, stamp, identity)
+        status, detail = finish_counts(f"{len(rows)} righe dal database", counts)
+        mark_run(pipeline_id, status, detail)
+        return {"rows": len(rows), "created": counts["created"], "updated": counts["updated"], "unchanged": counts["unchanged"], "failed": counts["failed"]}
+    if link["kind"] == "csv":
+        rows = read_csv_folder(link["id"])
+        counts = fresh_counts()
+        for _path, row in rows:
+            tally(ingest_row(pipeline_id, row), counts)
+        done = SCAMBIO / link["id"] / "elaborati"
+        done.mkdir(parents=True, exist_ok=True)
+        moved = set()
+        for path, _row in rows:
+            if path in moved or not path.exists():
+                continue
+            path.rename(done / f"{time.strftime('%Y%m%d%H%M%S')}-{path.name}")
+            moved.add(path)
+        status, detail = finish_counts(f"{len(rows)} righe dai file CSV", counts)
+        mark_run(pipeline_id, status, detail)
+        return {"rows": len(rows), "created": counts["created"], "updated": counts["updated"], "unchanged": counts["unchanged"], "failed": counts["failed"]}
+    if link["kind"] == "http":
+        records = outbound_rows(pipeline_id)
+        url = str(config.get("url") or "").strip() or f"http://127.0.0.1:{PORT}/inbox/{link['id']}/{link['token']}"
+        sent = 0
+        failed = ""
+        last = None
+        for item in records:
+            try:
+                post_json(url, item["payload"], destination_headers(config))
+            except Exception as error:
+                failed = str(error)
+                remember_delivery(pipeline_id, link["id"], item["payload"], "errore", failed)
+                remember_reject(pipeline_id, item["espoId"] or "", item["payload"], failed)
+                break
+            remember_delivery(pipeline_id, link["id"], item["payload"], "inviato", url)
+            remember_sink(pipeline_id, item["espoId"], item["payload"])
+            last = item
+            sent += 1
+        if last and last["modifiedAt"]:
+            save_cursor(pipeline_id, last["modifiedAt"], last["espoId"])
+        detail = f"{sent} record inviati a {url}"
+        if failed:
+            detail += ". " + failed
+        mark_run(pipeline_id, "errore" if failed else "ok", detail)
+        return {"sent": sent, "url": url, "failed": bool(failed)}
+    raise RuntimeError("tipo di collegamento non gestito")
+
+
+def execute_chain(pipeline_id: str, seen: set[str], with_dependencies: bool) -> dict:
+    if pipeline_id in seen:
+        raise RuntimeError("le integrazioni si aspettano in cerchio")
+    seen.add(pipeline_id)
+    with connect() as conn:
+        pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+    if pipeline is None:
+        raise KeyError(pipeline_id)
+    parent = pipeline["depends_on"]
+    if parent:
+        run_parent = with_dependencies
+        if not run_parent:
+            with connect() as conn:
+                parent_row = conn.execute("SELECT * FROM pipeline WHERE id = ?", (parent,)).fetchone()
+            run_parent = parent_row is not None and pipeline_due(parent_row)
+        if run_parent:
+            try:
+                execute_chain(parent, seen, with_dependencies)
+            except Exception as error:
+                print("[motore] dipendenza", parent, error)
+    return execute_pipeline(pipeline_id)
+
+
+def run_pipeline(pipeline_id: str, with_dependencies: bool = False) -> dict:
     if not RUN_LOCK.acquire(blocking=False):
         raise RuntimeError("un'esecuzione è già in corso")
     try:
-        with connect() as conn:
-            pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
-            link = None
-            if pipeline and pipeline["connection_id"]:
-                link = conn.execute(
-                    "SELECT * FROM connection WHERE id = ?",
-                    (pipeline["connection_id"],),
-                ).fetchone()
-        if pipeline is None:
-            raise KeyError(pipeline_id)
-        if link is None:
-            if pipeline["direction"] == "out":
-                result = pull(pipeline_id)
-                mark_run(pipeline_id, "ok", f"letti {result['exported']} record, senza destinazione")
-                return result
-            raise RuntimeError("collega un sistema esterno prima di eseguire")
-        config = json.loads(link["config_json"])
-        if link["kind"] == "webhook":
-            mark_run(pipeline_id, "ok", "in attesa che il sistema esterno chiami l'indirizzo")
-            return {"waiting": True, "url": f"{PUBLIC_BASE}/hook/{link['id']}/{link['token']}"}
-        if link["kind"] == "database":
-            rows = read_database(config)
-            created = updated = unchanged = failed = 0
-            first_error = ""
-            for row in rows:
-                try:
-                    item = ingest(pipeline_id, row)
-                except Exception as error:
-                    failed += 1
-                    first_error = first_error or str(error)
-                    continue
-                created += item["status"] == "creato"
-                updated += item["status"] == "aggiornato"
-                unchanged += item["status"] == "invariato"
-            detail = f"{len(rows)} righe dal database, {created} create, {updated} aggiornate, {unchanged} invariate, {failed} scartate"
-            if first_error:
-                detail += ". " + first_error
-            mark_run(pipeline_id, "errore" if failed and not (created or updated or unchanged) else "ok", detail)
-            return {"rows": len(rows), "created": created, "updated": updated, "unchanged": unchanged, "failed": failed}
-        if link["kind"] == "csv":
-            rows = read_csv_folder(link["id"])
-            results = []
-            for _path, row in rows:
-                results.append(ingest(pipeline_id, row))
-            done = SCAMBIO / link["id"] / "elaborati"
-            done.mkdir(parents=True, exist_ok=True)
-            moved = set()
-            for path, _row in rows:
-                if path in moved or not path.exists():
-                    continue
-                path.rename(done / f"{time.strftime('%Y%m%d%H%M%S')}-{path.name}")
-                moved.add(path)
-            detail = f"{len(rows)} righe dai file CSV"
-            mark_run(pipeline_id, "ok", detail)
-            return {"rows": len(rows), "results": len(results)}
-        if link["kind"] == "http":
-            result = pull(pipeline_id)
-            url = str(config.get("url") or "").strip() or f"http://127.0.0.1:{PORT}/inbox/{link['id']}/{link['token']}"
-            sent = 0
-            for record in result["records"]:
-                post_json(url, record)
-                remember_delivery(pipeline_id, link["id"], record, "inviato", url)
-                sent += 1
-            detail = f"{sent} record inviati a {url}"
-            mark_run(pipeline_id, "ok", detail)
-            return {"sent": sent, "url": url}
-        raise RuntimeError("tipo di collegamento non gestito")
+        return execute_chain(pipeline_id, set(), with_dependencies)
     except Exception as error:
         mark_run(pipeline_id, "errore", str(error))
         raise
     finally:
         RUN_LOCK.release()
+
+
+def set_enabled(pipeline_id: str, enabled: bool) -> dict:
+    with connect() as conn:
+        found = conn.execute("SELECT id FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+        if found is None:
+            raise KeyError(pipeline_id)
+        conn.execute("UPDATE pipeline SET enabled = ? WHERE id = ?", (1 if enabled else 0, pipeline_id))
+    return {"id": pipeline_id, "enabled": bool(enabled)}
+
+
+def export_config() -> dict:
+    current = snapshot()
+    pipelines = []
+    for item in current["pipelines"]:
+        pipelines.append({
+            "id": item["id"],
+            "name": item["name"],
+            "direction": item["direction"],
+            "espoEntity": item["espo_entity"],
+            "externalIdField": item["external_id_field"],
+            "keyTemplate": item["key_template"],
+            "keyField": item["key_field"],
+            "connectionId": item["connection_id"],
+            "scheduleMinutes": item["schedule_minutes"],
+            "dependsOn": item.get("depends_on"),
+            "cursorColumn": item.get("cursor_column"),
+            "enabled": item.get("enabled", 1),
+            "onDuplicate": item.get("on_duplicate") or "fail",
+            "mapping": item["mapping"],
+        })
+    return {"connections": current["connections"], "pipelines": pipelines}
+
+
+def import_config(body: dict) -> dict:
+    if not isinstance(body, dict):
+        raise RuntimeError("il file non è una configurazione")
+    saved_connections = 0
+    for item in body.get("connections") or []:
+        if not isinstance(item, dict):
+            continue
+        save_connection({
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "kind": item.get("kind"),
+            "config": item.get("config") or {},
+        })
+        saved_connections += 1
+    saved_pipelines = 0
+    for item in body.get("pipelines") or []:
+        if not isinstance(item, dict) or not item.get("id") or not item.get("mapping"):
+            continue
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, schedule_minutes, depends_on, cursor_column, enabled, on_duplicate)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    direction = excluded.direction,
+                    espo_entity = excluded.espo_entity,
+                    external_id_field = excluded.external_id_field,
+                    key_template = excluded.key_template,
+                    mapping_json = excluded.mapping_json,
+                    key_field = excluded.key_field,
+                    connection_id = excluded.connection_id,
+                    schedule_minutes = excluded.schedule_minutes,
+                    depends_on = excluded.depends_on,
+                    cursor_column = excluded.cursor_column,
+                    enabled = excluded.enabled,
+                    on_duplicate = excluded.on_duplicate
+                """,
+                (
+                    item["id"], item.get("name") or item["id"], item.get("direction") or "in",
+                    item.get("espoEntity") or "", item.get("externalIdField") or "",
+                    item.get("keyTemplate") or "", json.dumps(item["mapping"], ensure_ascii=False),
+                    item.get("keyField") or "cExternalKey", item.get("connectionId"),
+                    int(item.get("scheduleMinutes") or 0), item.get("dependsOn"),
+                    item.get("cursorColumn"), 0 if item.get("enabled") in (False, 0, "0") else 1,
+                    item.get("onDuplicate") or "fail",
+                ),
+            )
+        saved_pipelines += 1
+    return {"connections": saved_connections, "pipelines": saved_pipelines}
 
 
 def scheduler() -> None:
@@ -1296,15 +2094,13 @@ def scheduler() -> None:
             with connect() as conn:
                 rows = conn.execute(
                     """
-                    SELECT id, schedule_minutes, last_run FROM pipeline
-                    WHERE schedule_minutes > 0 AND connection_id IS NOT NULL
+                    SELECT id, schedule_minutes, last_run, enabled FROM pipeline
+                    WHERE schedule_minutes > 0 AND connection_id IS NOT NULL AND COALESCE(enabled, 1) = 1
                     """
                 ).fetchall()
             for row in rows:
-                if row["last_run"]:
-                    previous = time.mktime(time.strptime(row["last_run"], "%Y-%m-%d %H:%M:%S"))
-                    if now - previous < row["schedule_minutes"] * 60:
-                        continue
+                if not pipeline_due(row, now):
+                    continue
                 try:
                     run_pipeline(row["id"])
                 except Exception as error:
@@ -1364,6 +2160,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/health":
                 self.send_json(200, {"ok": True, **STATE})
                 return
+            if path == "/api/export":
+                self.send_json(200, export_config())
+                return
         except Exception as error:
             self.send_json(400, {"error": str(error)})
             return
@@ -1379,8 +2178,25 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/pipelines":
                 self.send_json(200, save_pipeline(self.read_json()))
                 return
+            if path == "/api/sheets":
+                self.send_json(200, create_sheet(self.read_json()))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "sheets"] and parts[3] == "fields":
+                self.send_json(200, add_sheet_field(parts[2], self.read_json()))
+                return
+            if path == "/api/import":
+                self.send_json(200, import_config(self.read_json()))
+                return
             if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "run":
-                self.send_json(200, run_pipeline(parts[2]))
+                body = self.read_json()
+                self.send_json(200, run_pipeline(parts[2], bool(body.get("withDependencies"))))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "dry":
+                self.send_json(200, dry_run(parts[2]))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "enabled":
+                body = self.read_json()
+                self.send_json(200, set_enabled(parts[2], body.get("enabled") not in (False, 0, "0")))
                 return
             if len(parts) == 3 and parts[0] == "hook":
                 self.send_json(200, accept_hook(parts[1], parts[2], self.read_json()))
@@ -1389,7 +2205,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, accept_inbox(parts[1], parts[2], self.read_json()))
                 return
             if path.startswith("/api/ingest/"):
-                self.send_json(200, ingest(path.removeprefix("/api/ingest/"), self.read_json()))
+                pipeline_id = path.removeprefix("/api/ingest/")
+                body = self.read_json()
+                try:
+                    self.send_json(200, ingest(pipeline_id, body))
+                except Exception as error:
+                    remember_reject(pipeline_id, "", body, str(error))
+                    self.send_json(400, {"error": str(error)})
                 return
             if path.startswith("/api/pull/"):
                 self.send_json(200, pull(path.removeprefix("/api/pull/")))

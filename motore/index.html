@@ -130,6 +130,11 @@
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#8b939c" d="M1 1h6v6H1V1zm8 0h6v6H9V1zM1 9h6v6H1V9zm8 0h6v6H9V9z"/></svg>
         <span class="nav-label">Inizio</span>
       </a>
+      <div class="tab-divider">Espo</div>
+      <a href="#/schede" data-nav="/schede">
+        <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#d19a2e" d="M2 2h5v5H2V2zm7 0h5v5H9V2zM2 9h5v5H2V9zm7 1.2h5V14H9v-3.8z"/></svg>
+        <span class="nav-label">Schede</span>
+      </a>
       <div class="tab-divider">Integrazione</div>
       <a href="#/collegamenti" data-nav="/collegamenti">
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#3a7fc1" d="M6.3 9.7a3.2 3.2 0 0 1 0-4.5l1.8-1.8a3.2 3.2 0 0 1 4.5 4.5L11.4 9l-1.1-1.1 1.2-1.2a1.6 1.6 0 0 0-2.3-2.3L7.4 6.2a1.6 1.6 0 0 0 0 2.3l.4.4-1.1 1.1-.4-.3zm3.4-3.4a3.2 3.2 0 0 1 0 4.5l-1.8 1.8a3.2 3.2 0 0 1-4.5-4.5L4.6 7l1.1 1.1-1.2 1.2a1.6 1.6 0 0 0 2.3 2.3l1.8-1.8a1.6 1.6 0 0 0 0-2.3l-.4-.4 1.1-1.1.4.3z"/></svg>
@@ -173,12 +178,12 @@
   </dialog>
   <script>
     const kindLabel = { webhook: "Webhook", database: "Database", csv: "File CSV", http: "Uscita HTTP" };
-    const phrases = { creato: "Creato in Espo", aggiornato: "Aggiornato", invariato: "Invariato", synced: "Sincronizzato", inviato: "Inviato", ricevuto: "Ricevuto" };
+    const phrases = { creato: "Creato in Espo", aggiornato: "Aggiornato", invariato: "Invariato", synced: "Sincronizzato", inviato: "Inviato", ricevuto: "Ricevuto", scartato: "Scartato", errore: "Errore", ok: "Riuscito" };
     const main = document.querySelector("#contenuto");
     const dialog = document.querySelector("#conferma");
     let catalog = [];
     let espoUrl = "http://localhost:8088";
-    let state = { connections: [], pipelines: [], queue: [], deliveries: [] };
+    let state = { connections: [], pipelines: [], queue: [], deliveries: [], rejects: [], runs: [] };
     let health = { espo: "in attesa", fields: "" };
     let draft = null;
     let lastPath = "";
@@ -240,6 +245,11 @@
         </div>
         <p class="lead">${health.espo === "raggiungibile" ? "" : esc(espoText) + " "}Prima colleghi il sistema esterno. Poi scegli quale scheda di Espo riceve o manda i dati.</p>
         <div class="dashlets">
+          <a class="dashlet" href="#/schede">
+            <span class="dashlet-title">Schede</span>
+            <strong class="dashlet-count">${catalog.length}</strong>
+            <span class="hint">Le schede di Espo, e i campi che Nesso ci aggiunge.</span>
+          </a>
           <a class="dashlet" href="#/collegamenti">
             <span class="dashlet-title">Collegamenti</span>
             <strong class="dashlet-count">${connections.length}</strong>
@@ -252,8 +262,8 @@
           </a>
           <a class="dashlet" href="#/attivita">
             <span class="dashlet-title">Attività</span>
-            <strong class="dashlet-count">${(state.queue || []).length + (state.deliveries || []).length}</strong>
-            <span class="hint">Che cosa è entrato e che cosa è uscito.</span>
+            <strong class="dashlet-count">${(state.queue || []).length + (state.deliveries || []).length + (state.rejects || []).length}</strong>
+            <span class="hint">Ingressi, uscite e righe scartate.</span>
           </a>
         </div>
         <details class="panel">
@@ -272,7 +282,10 @@
       return `<article class="panel">
         <h2>${esc(item.name)}</h2>
         <dl><dt>Tipo</dt><dd>${esc(kindLabel[item.kind] || item.kind)}</dd>${detail}</dl>
-        <div class="actions"><button type="button" class="danger" data-del-c="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button></div>
+        <div class="actions">
+          <a class="btn secondary" href="#/collegamenti/modifica/${esc(item.id)}">Modifica</a>
+          <button type="button" class="danger" data-del-c="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button>
+        </div>
       </article>`;
     }
 
@@ -289,36 +302,52 @@
       bindDelete();
     }
 
-    function connectionFormPage() {
-      shell("Nuovo collegamento", `
-        <div class="page-header"><h1>Nuovo collegamento</h1></div>
+    function connectionFormPage(existing) {
+      const config = (existing && existing.config) || {};
+      const kind = existing ? existing.kind : "webhook";
+      const title = existing ? "Modifica collegamento" : "Nuovo collegamento";
+      shell(title, `
+        <div class="page-header"><h1>${title}</h1></div>
         <p class="lead">Scegli un solo tipo. I campi sotto cambiano in base a quella scelta.</p>
         <form id="connection-form" class="panel">
           <label>Nome del collegamento
-            <input name="name" required autocomplete="off">
+            <input name="name" required autocomplete="off" value="${esc(existing ? existing.name : "")}">
             <span class="hint">Un nome che riconosci, per esempio «Ordini del magazzino».</span>
           </label>
           <fieldset class="radios">
             <legend>Tipo</legend>
-            <label><input type="radio" name="kind" value="webhook" checked> Webhook. Il sistema esterno chiama un indirizzo.</label>
-            <label><input type="radio" name="kind" value="database"> Database. Il motore legge una SELECT. Non scrive sul database.</label>
-            <label><input type="radio" name="kind" value="csv"> File CSV. Depositi un file in una cartella.</label>
-            <label><input type="radio" name="kind" value="http"> Destinazione HTTP. Espo manda i dati fuori.</label>
+            <label><input type="radio" name="kind" value="webhook" ${kind === "webhook" ? "checked" : ""}> Webhook. Il sistema esterno chiama un indirizzo.</label>
+            <label><input type="radio" name="kind" value="database" ${kind === "database" ? "checked" : ""}> Database. Il motore legge una SELECT. Non scrive sul database.</label>
+            <label><input type="radio" name="kind" value="csv" ${kind === "csv" ? "checked" : ""}> File CSV. Depositi un file in una cartella. Virgola o punto e virgola.</label>
+            <label><input type="radio" name="kind" value="http" ${kind === "http" ? "checked" : ""}> Destinazione HTTP. Espo manda i dati fuori.</label>
           </fieldset>
           <div id="db-fields" hidden>
-            <label>Server <input name="host" autocomplete="off"></label>
-            <label>Porta <input name="port" value="3306" inputmode="numeric"></label>
-            <label>Database <input name="database" autocomplete="off"></label>
-            <label>Utente <input name="user" autocomplete="off"></label>
-            <label>Password <input name="password" type="password" autocomplete="new-password"></label>
-            <label>Query SELECT <textarea name="query"></textarea></label>
+            <label>Server <input name="host" autocomplete="off" value="${esc(config.host || "")}"></label>
+            <label>Porta <input name="port" value="${esc(config.port || "3306")}" inputmode="numeric"></label>
+            <label>Database <input name="database" autocomplete="off" value="${esc(config.database || "")}"></label>
+            <label>Utente <input name="user" autocomplete="off" value="${esc(config.user || "")}"></label>
+            <label>Password <input name="password" type="password" autocomplete="new-password" placeholder="${config.hasPassword ? "Lascia vuoto per non cambiarla" : ""}"></label>
+            <label>Query SELECT <textarea name="query">${esc(config.query || "")}</textarea></label>
             <p class="hint">Su questa prova il server è <code>db</code>, il database è <code>gestionale</code>, l'utente è <code>espocrm</code> e la password è <code>locale-db</code>.</p>
           </div>
           <div id="http-fields" hidden>
             <label>Indirizzo di destinazione
-              <input name="url" type="url" placeholder="https://">
+              <input name="url" type="url" placeholder="https://" value="${esc(config.url || "")}">
               <span class="hint">Lascialo vuoto per usare la casella di questa app, visibile dopo il salvataggio.</span>
             </label>
+            <label>Autenticazione
+              <select name="auth">
+                <option value="none" ${config.auth === "bearer" || config.auth === "basic" || config.auth === "header" ? "" : "selected"}>Nessuna</option>
+                <option value="bearer" ${config.auth === "bearer" ? "selected" : ""}>Bearer, un token</option>
+                <option value="basic" ${config.auth === "basic" ? "selected" : ""}>Utente e password</option>
+                <option value="header" ${config.auth === "header" ? "selected" : ""}>Un'intestazione con nome e valore</option>
+              </select>
+            </label>
+            <label>Token <input name="token" type="password" autocomplete="new-password" placeholder="${config.hasToken ? "Lascia vuoto per non cambiarlo" : ""}"></label>
+            <label>Utente della destinazione <input name="httpUser" autocomplete="off" value="${esc(config.user || "")}"></label>
+            <label>Password della destinazione <input name="httpPassword" type="password" autocomplete="new-password" placeholder="${config.hasPassword ? "Lascia vuoto per non cambiarla" : ""}"></label>
+            <label>Nome intestazione <input name="headerName" autocomplete="off" value="${esc(config.headerName || "")}"></label>
+            <label>Valore intestazione <input name="headerValue" type="password" autocomplete="new-password" placeholder="${config.hasHeader ? "Lascia vuoto per non cambiarlo" : ""}"></label>
           </div>
           <p id="form-error" class="error" role="alert"></p>
           <div class="actions">
@@ -329,24 +358,35 @@
       `);
       const form = document.querySelector("#connection-form");
       const show = () => {
-        const kind = form.kind.value;
-        document.querySelector("#db-fields").hidden = kind !== "database";
-        document.querySelector("#http-fields").hidden = kind !== "http";
+        const chosen = form.kind.value;
+        document.querySelector("#db-fields").hidden = chosen !== "database";
+        document.querySelector("#http-fields").hidden = chosen !== "http";
       };
       form.addEventListener("change", show);
       show();
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const body = { name: form.name.value.trim(), kind: form.kind.value, config: {} };
+        if (existing) body.id = existing.id;
         if (!body.name) return showError("Scrivi il nome.");
         if (body.kind === "database") {
           body.config = { host: form.host.value.trim(), port: form.port.value.trim(), database: form.database.value.trim(), user: form.user.value.trim(), password: form.password.value, query: form.query.value.trim() };
         }
-        if (body.kind === "http") body.config = { url: form.url.value.trim() };
+        if (body.kind === "http") {
+          body.config = {
+            url: form.url.value.trim(),
+            auth: form.auth.value,
+            token: form.token.value,
+            user: form.httpUser.value.trim(),
+            password: form.httpPassword.value,
+            headerName: form.headerName.value.trim(),
+            headerValue: form.headerValue.value
+          };
+        }
         const response = await fetch("/api/connections", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const data = await response.json();
         if (!response.ok) return showError(data.error || "Non sono riuscito a salvare.");
-        say("Collegamento creato.");
+        say(existing ? "Collegamento aggiornato." : "Collegamento creato.");
         location.hash = "#/collegamenti";
       });
     }
@@ -368,8 +408,9 @@
         ${items.map(item => {
           const link = connectionOf(item.connection_id);
           const entity = entityOf(item.espo_entity);
-          const when = item.schedule_minutes ? "Ogni " + item.schedule_minutes + " minuti" : "Solo a comando, oppure all'arrivo di un webhook";
+          const when = item.enabled === 0 ? "In pausa" : (item.schedule_minutes ? "Ogni " + item.schedule_minutes + " minuti" : "Solo a comando, oppure all'arrivo di un webhook");
           const outcome = item.last_status === "errore" ? "Errore" : (item.last_run ? "Ultimo giro riuscito" : "Mai eseguita");
+          const before = (state.pipelines || []).find(row => row.id === item.depends_on);
           return `<article class="panel">
             <h2>${esc(item.name)}</h2>
             <dl>
@@ -377,29 +418,49 @@
               <dt>Scheda</dt><dd>${esc(entity ? entity.label : item.espo_entity)}</dd>
               <dt>Collegamento</dt><dd>${esc(link ? link.name : "Nessuno")}</dd>
               <dt>Quando</dt><dd>${esc(when)}</dd>
+              ${before ? `<dt>Prima</dt><dd>${esc(before.name)}</dd>` : ""}
               <dt>Esito</dt><dd>${esc(outcome)}${item.last_detail ? ". " + esc(item.last_detail) : ""}</dd>
             </dl>
             <div class="actions">
               <button type="button" data-run="${esc(item.id)}">Esegui ora</button>
+              <button type="button" class="secondary" data-dry="${esc(item.id)}">Prova a secco</button>
+              <a class="btn secondary" href="#/integrazioni/modifica/${esc(item.id)}/1">Modifica</a>
+              <button type="button" class="secondary" data-pause="${esc(item.id)}" data-enabled="${item.enabled === 0 ? "0" : "1"}">${item.enabled === 0 ? "Riattiva" : "Metti in pausa"}</button>
               <button type="button" class="danger" data-del-p="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button>
             </div>
             <p class="hint" data-msg="${esc(item.id)}" role="status"></p>
           </article>`;
         }).join("") || `<p class="panel">Nessuna integrazione.</p>`}
+        <div class="panel">
+          <h2>Configurazione</h2>
+          <p class="hint">Il file non contiene le password. Su un altro ambiente vanno riscritte.</p>
+          <div class="actions">
+            <button type="button" id="export-config">Scarica</button>
+            <label class="btn secondary">Carica<input id="import-config" type="file" accept="application/json,.json" hidden></label>
+          </div>
+        </div>
       `);
       bindDelete();
-      main.querySelectorAll("[data-run]").forEach(button => button.addEventListener("click", () => execute(button.dataset.run)));
+      main.querySelectorAll("[data-run]").forEach(button => button.addEventListener("click", () => execute(button.dataset.run, true)));
+      main.querySelectorAll("[data-dry]").forEach(button => button.addEventListener("click", () => dry(button.dataset.dry)));
+      main.querySelectorAll("[data-pause]").forEach(button => button.addEventListener("click", () => toggleEnabled(button.dataset.pause, button.dataset.enabled !== "1")));
+      document.querySelector("#export-config").addEventListener("click", downloadConfig);
+      document.querySelector("#import-config").addEventListener("change", importConfig);
     }
 
-    async function execute(id) {
+    async function execute(id, withDependencies) {
       const box = main.querySelector(`[data-msg="${id}"]`);
       const button = main.querySelector(`[data-run="${id}"]`);
       button.disabled = true;
       box.textContent = "Esecuzione in corso.";
-      const response = await fetch("/api/pipelines/" + id + "/run", { method: "POST" });
+      const response = await fetch("/api/pipelines/" + id + "/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ withDependencies: !!withDependencies })
+      });
       const data = await response.json();
       const text = response.ok
-        ? (data.waiting ? "In attesa di chiamate sul webhook." : "Esecuzione terminata. Il dettaglio è nel riquadro.")
+        ? (data.waiting ? "In attesa di chiamate sul webhook." : (data.failed ? "Esecuzione interrotta. Le righe scartate sono in Attività." : "Esecuzione terminata. Il dettaglio è nel riquadro."))
         : (data.error || "Esecuzione non riuscita.");
       say(text);
       await refresh();
@@ -407,16 +468,109 @@
       if (again) again.textContent = text;
     }
 
+    async function dry(id) {
+      const box = main.querySelector(`[data-msg="${id}"]`);
+      box.textContent = "Prova in corso, senza scrivere su Espo.";
+      const response = await fetch("/api/pipelines/" + id + "/dry", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        box.textContent = data.error || "Prova non riuscita.";
+        return;
+      }
+      const rows = data.rows || [];
+      box.textContent = data.detail || (rows.length ? rows.map(row => row.detail ? ("Scartata: " + row.detail) : JSON.stringify(row.mapped || row)).join(" · ") : "Nessuna riga da mostrare.");
+    }
+
+    async function toggleEnabled(id, enabled) {
+      await fetch("/api/pipelines/" + id + "/enabled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled })
+      });
+      say(enabled ? "Integrazione riattivata." : "Integrazione in pausa.");
+      await refresh();
+    }
+
+    async function downloadConfig() {
+      const response = await fetch("/api/export");
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "nesso-configurazione.json";
+      link.click();
+    }
+
+    async function importConfig(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      try {
+        const body = JSON.parse(await file.text());
+        const response = await fetch("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const data = await response.json();
+        say(response.ok ? "Configurazione caricata." : (data.error || "Caricamento non riuscito."));
+      } catch (error) {
+        say("Il file non è una configurazione.");
+      }
+      await refresh();
+    }
+
+    function emptyRow() {
+      return { from: "", role: "field", to: "", lookupEntity: "", lookupBy: "", transform: "copy", constant: "", valueMap: "", onMiss: "fail" };
+    }
+
     function blankDraft() {
-      return { name: "", connectionId: "", entityMode: "existing", espoEntity: "", newSingular: "", newPlural: "", externalIdField: "", scheduleMinutes: "0", rows: [{ from: "", role: "field", to: "", lookupEntity: "", lookupBy: "" }] };
+      return { id: "", name: "", connectionId: "", entityMode: "existing", espoEntity: "", newSingular: "", newPlural: "", externalIdField: "", scheduleMinutes: "0", dependsOn: "", cursorColumn: "", enabled: true, onDuplicate: "fail", rows: [emptyRow()] };
+    }
+
+    function draftFromPipeline(item) {
+      const rows = (item.mapping || []).map(rule => {
+        if (rule.transform === "lookups") {
+          return { from: rule.from, role: "links", to: String(rule.to || "").replace(/Ids$/, ""), lookupEntity: rule.lookupEntity || "", lookupBy: rule.lookupBy || "", transform: "copy", constant: "", valueMap: "", onMiss: rule.onMiss || "fail" };
+        }
+        if (rule.parentType || (rule.transform === "lookup" && rule.to === "parentId")) {
+          return { from: rule.from, role: "parent", to: rule.parentType || rule.lookupEntity || "", lookupEntity: rule.parentType || rule.lookupEntity || "", lookupBy: rule.lookupBy || "", transform: "copy", constant: "", valueMap: "", onMiss: rule.onMiss || "fail" };
+        }
+        if (rule.transform === "lookup") {
+          return { from: rule.from, role: "link", to: rule.lookupEntity || "", lookupEntity: rule.lookupEntity || "", lookupBy: rule.lookupBy || "", transform: "copy", constant: "", valueMap: "", onMiss: rule.onMiss || "fail" };
+        }
+        let transform = rule.transform || "copy";
+        let constant = "";
+        if (String(transform).startsWith("const:")) {
+          constant = String(transform).slice(6);
+          transform = "const";
+        }
+        const valueMap = rule.valueMap ? Object.entries(rule.valueMap).map(([key, value]) => key + "=" + value).join("\n") : "";
+        return { from: rule.from === "_const" ? "" : rule.from, role: "field", to: rule.to, lookupEntity: "", lookupBy: "", transform, constant, valueMap, onMiss: "fail" };
+      });
+      return {
+        id: item.id,
+        name: item.name,
+        connectionId: item.connection_id || "",
+        entityMode: "existing",
+        espoEntity: item.espo_entity,
+        newSingular: "",
+        newPlural: "",
+        externalIdField: item.external_id_field || "",
+        scheduleMinutes: String(item.schedule_minutes || 0),
+        dependsOn: item.depends_on || "",
+        cursorColumn: item.cursor_column || "",
+        enabled: item.enabled !== 0,
+        onDuplicate: item.on_duplicate || "fail",
+        rows: rows.length ? rows : [emptyRow()]
+      };
+    }
+
+    function wizardBase() {
+      return draft && draft.id ? "#/integrazioni/modifica/" + draft.id + "/" : "#/integrazioni/nuova/";
     }
 
     function wizard(step) {
       if (!draft) draft = blankDraft();
       const stepNumber = Number(step);
-      if (![1, 2, 3, 4].includes(stepNumber)) { location.hash = "#/integrazioni/nuova/1"; return; }
+      if (![1, 2, 3, 4].includes(stepNumber)) { location.hash = wizardBase() + "1"; return; }
       const titles = ["Nome e collegamento", "Scheda di Espo", "Abbinamento", "Quando eseguirla"];
-      shell("Nuova integrazione, passo " + stepNumber, `
+      const heading = draft.id ? "Modifica integrazione" : "Nuova integrazione";
+      shell(heading + ", passo " + stepNumber, `
         <div class="page-header">
           <div class="page-title"><div><p class="step">Passo ${stepNumber} di 4</p><h1>${titles[stepNumber - 1]}</h1></div></div>
         </div>
@@ -431,7 +585,7 @@
       `);
       const form = document.querySelector("#wizard");
       const back = document.querySelector("#back");
-      if (back) back.addEventListener("click", () => { readStep(stepNumber); location.hash = "#/integrazioni/nuova/" + (stepNumber - 1); });
+      if (back) back.addEventListener("click", () => { readStep(stepNumber); location.hash = wizardBase() + (stepNumber - 1); });
       if (stepNumber === 2) {
         form.addEventListener("change", () => {
           const mode = form.entityMode.value;
@@ -444,7 +598,7 @@
         event.preventDefault();
         const error = readStep(stepNumber);
         if (error) return showError(error);
-        if (stepNumber < 4) { location.hash = "#/integrazioni/nuova/" + (stepNumber + 1); return; }
+        if (stepNumber < 4) { location.hash = wizardBase() + (stepNumber + 1); return; }
         await savePipeline();
       });
     }
@@ -494,9 +648,12 @@
     function stepMap() {
       const outbound = selectedKind() === "http";
       const rows = draft.rows.map((row, index) => mapFieldset(row, index, outbound)).join("");
+      const columns = ((connectionOf(draft.connectionId) || {}).config || {}).columns || [];
+      const list = columns.length ? `<datalist id="colonne">${columns.map(name => `<option value="${esc(name)}"></option>`).join("")}</datalist>` : "";
       const identity = outbound ? "" : `
+        ${list}
         <label>Colonna che identifica il record nel sistema esterno
-          <input name="externalIdField" value="${esc(draft.externalIdField)}" required autocomplete="off">
+          <input name="externalIdField" value="${esc(draft.externalIdField)}" required autocomplete="off" list="colonne">
           <span class="hint">Lo stesso record, con lo stesso valore, aggiorna la scheda invece di crearne un'altra.</span>
         </label>`;
       return `${identity}<div id="map-rows">${rows}</div><button type="button" class="secondary" id="add-row">Aggiungi un abbinamento</button>`;
@@ -520,7 +677,7 @@
       const multi = multiLinks(draft.espoEntity, row.lookupEntity);
       return `<fieldset data-row>
         <legend>Abbinamento ${index + 1}</legend>
-        <label>Colonna del sistema esterno <input class="ext" value="${esc(row.from)}" autocomplete="off"></label>
+        <label>Colonna del sistema esterno <input class="ext" value="${esc(row.from)}" autocomplete="off" list="colonne"></label>
         <fieldset class="radios">
           <legend>Che cosa ne facciamo</legend>
           <label><input type="radio" class="role" name="role-${index}" value="field" ${role === "field" ? "checked" : ""}> Lo scriviamo in un campo</label>
@@ -528,7 +685,22 @@
           <label><input type="radio" class="role" name="role-${index}" value="links" ${role === "links" ? "checked" : ""}> Colleghiamo più record</label>
           <label><input type="radio" class="role" name="role-${index}" value="parent" ${role === "parent" ? "checked" : ""}> È un'attività appesa a una scheda</label>
         </fieldset>
-        <div class="as-field" ${role === "field" ? "" : "hidden"}>${fieldBlock}</div>
+        <div class="as-field" ${role === "field" ? "" : "hidden"}>${fieldBlock}
+          ${draft.entityMode === "new" ? "" : `<label>Trasformazione
+            <select class="transform">
+              <option value="copy" ${(row.transform || "copy") === "copy" ? "selected" : ""}>Copia il valore</option>
+              <option value="split_first" ${row.transform === "split_first" ? "selected" : ""}>Prima parola</option>
+              <option value="split_last" ${row.transform === "split_last" ? "selected" : ""}>Resto del testo</option>
+              <option value="const" ${row.transform === "const" ? "selected" : ""}>Valore fisso</option>
+              <option value="map" ${row.transform === "map" ? "selected" : ""}>Mappa dei valori</option>
+            </select>
+          </label>
+          <label class="as-const" ${row.transform === "const" ? "" : "hidden"}>Valore fisso <input class="constant" value="${esc(row.constant || "")}" autocomplete="off"></label>
+          <label class="as-map" ${row.transform === "map" ? "" : "hidden"}>Valori, uno per riga, esterno=Espo
+            <textarea class="value-map">${esc(row.valueMap || "")}</textarea>
+            <span class="hint">La riga *=Altro vale per i valori non elencati. Un telefono italiano viene messo in forma internazionale.</span>
+          </label>`}
+        </div>
         <div class="as-link" ${role === "link" || role === "parent" ? "" : "hidden"}>
           <label>Scheda da collegare <select class="foreign">${options(foreign, "name", "label", row.lookupEntity)}</select></label>
           <label>Campo con cui riconosciamo il record <select class="lookupBy">${options(fieldChoices(foreignName, false), "name", "label", row.lookupBy)}</select></label>
@@ -539,6 +711,13 @@
           <label>Campo con cui riconosciamo ogni record <select class="lookupBy">${options(fieldChoices(foreignName, false), "name", "label", row.lookupBy)}</select></label>
           <span class="hint">Nella cella possono esserci più valori, separati da virgola.</span>
         </div>
+        <label class="as-miss" ${role === "field" ? "hidden" : ""}>Se il record collegato non c'è
+          <select class="on-miss">
+            <option value="fail" ${(row.onMiss || "fail") === "fail" ? "selected" : ""}>Scarta la riga</option>
+            <option value="skip" ${row.onMiss === "skip" ? "selected" : ""}>Lascia il legame vuoto</option>
+            <option value="create" ${row.onMiss === "create" ? "selected" : ""}>Crea il record</option>
+          </select>
+        </label>
         <button type="button" class="secondary remove">Togli questo abbinamento</button>
       </fieldset>`;
     }
@@ -554,13 +733,14 @@
         form.querySelectorAll("[data-row]").forEach(row => {
           const role = row.querySelector(".role");
           if (role) row.querySelectorAll(".role").forEach(input => input.addEventListener("change", () => paint(false)));
+          row.querySelectorAll(".transform").forEach(input => input.addEventListener("change", () => paint(false)));
           row.querySelectorAll(".foreign").forEach(foreign => foreign.addEventListener("change", () => paint(false)));
           const remove = row.querySelector(".remove");
           remove.addEventListener("click", () => {
             readStep(3);
             const index = [...form.querySelectorAll("[data-row]")].indexOf(row);
             draft.rows.splice(index, 1);
-            if (!draft.rows.length) draft.rows.push({ from: "", role: "field", to: "", lookupEntity: "", lookupBy: "" });
+            if (!draft.rows.length) draft.rows.push(emptyRow());
             paint(true);
           });
         });
@@ -568,7 +748,7 @@
       hook();
       document.querySelector("#add-row").addEventListener("click", () => {
         readStep(3);
-        draft.rows.push({ from: "", role: "field", to: "", lookupEntity: "", lookupBy: "" });
+        draft.rows.push(emptyRow());
         paint(true);
       });
     }
@@ -589,9 +769,27 @@
         </dl>
         <label>Quando
           <select name="scheduleMinutes">
-            ${Object.entries(when).map(([value, label]) => `<option value="${value}" ${draft.scheduleMinutes === value ? "selected" : ""}>${label}</option>`).join("")}
+            ${Object.entries(when).map(([value, label]) => `<option value="${value}" ${String(draft.scheduleMinutes) === value ? "selected" : ""}>${label}</option>`).join("")}
           </select>
-        </label>`;
+        </label>
+        <label>Prima esegui
+          <select name="dependsOn">
+            <option value="">Nessuna</option>
+            ${(state.pipelines || []).filter(item => item.id !== draft.id).map(item => `<option value="${esc(item.id)}" ${item.id === draft.dependsOn ? "selected" : ""}>${esc(item.name)}</option>`).join("")}
+          </select>
+          <span class="hint">Quando lanci questa, parte prima l'altra. Il pianificatore la rilancia solo se è di nuovo ora.</span>
+        </label>
+        ${outbound ? "" : `<label>Colonna di variazione, facoltativa
+          <input name="cursorColumn" value="${esc(draft.cursorColumn || "")}" list="colonne" autocomplete="off">
+          <span class="hint">Se la indichi, il database non viene riletto tutto: si riparte dall'ultimo valore. Vale per MySQL e MariaDB.</span>
+        </label>
+        <label>Se Espo ha già un record simile
+          <select name="onDuplicate">
+            <option value="fail" ${draft.onDuplicate !== "adopt" ? "selected" : ""}>Scarta la riga</option>
+            <option value="adopt" ${draft.onDuplicate === "adopt" ? "selected" : ""}>Aggiorna quel record e mettici la nostra chiave</option>
+          </select>
+        </label>`}
+        <label><input type="checkbox" name="enabled" ${draft.enabled === false ? "" : "checked"}> Integrazione attiva</label>`;
     }
 
     function readStep(step) {
@@ -630,13 +828,15 @@
           const roleInput = row.querySelector(".role:checked");
           const role = roleInput ? roleInput.value : "field";
           const ext = row.querySelector(".ext");
-          if (outbound) return { from: row.querySelector(".espo").value, role: "field", to: ext.value.trim(), lookupEntity: "", lookupBy: "" };
+          if (outbound) return { ...emptyRow(), from: row.querySelector(".espo").value, role: "field", to: ext.value.trim() };
           const typed = row.querySelector(".field-label");
           const chosen = row.querySelector(".espo");
           const box = role === "links" ? row.querySelector(".as-links") : row.querySelector(".as-link");
           const foreignSelect = box ? box.querySelector(".foreign") : null;
           const lookupSelect = box ? box.querySelector(".lookupBy") : null;
           const multi = row.querySelector(".as-links .multi");
+          const transform = row.querySelector(".transform");
+          const miss = row.querySelector(".on-miss");
           let to = typed ? typed.value.trim() : (chosen ? chosen.value : "");
           if (role === "link" || role === "parent") to = foreignSelect ? foreignSelect.value : "";
           if (role === "links") to = multi ? multi.value : "";
@@ -645,25 +845,53 @@
             role,
             to,
             lookupEntity: foreignSelect ? foreignSelect.value : "",
-            lookupBy: lookupSelect ? lookupSelect.value : ""
+            lookupBy: lookupSelect ? lookupSelect.value : "",
+            transform: transform ? transform.value : "copy",
+            constant: (row.querySelector(".constant") || {}).value ? row.querySelector(".constant").value.trim() : "",
+            valueMap: (row.querySelector(".value-map") || {}).value || "",
+            onMiss: miss ? miss.value : "fail"
           };
         });
         if (!outbound && !draft.externalIdField) return "Indica la colonna che identifica il record.";
         if (!draft.rows.some(row => row.from && row.to)) return "Compila almeno un abbinamento.";
       }
-      if (step === 4 && form.scheduleMinutes) draft.scheduleMinutes = form.scheduleMinutes.value;
+      if (step === 4 && form.scheduleMinutes) {
+        draft.scheduleMinutes = form.scheduleMinutes.value;
+        draft.dependsOn = form.dependsOn.value;
+        draft.cursorColumn = form.cursorColumn ? form.cursorColumn.value.trim() : "";
+        draft.onDuplicate = form.onDuplicate ? form.onDuplicate.value : "fail";
+        draft.enabled = form.enabled.checked;
+      }
       return "";
+    }
+
+    function parseValueMap(text) {
+      const table = {};
+      String(text || "").split(/\r?\n/).forEach(line => {
+        const clean = line.trim();
+        if (!clean || !clean.includes("=")) return;
+        const cut = clean.indexOf("=");
+        table[clean.slice(0, cut).trim()] = clean.slice(cut + 1).trim();
+      });
+      return table;
     }
 
     async function savePipeline() {
       const outbound = selectedKind() === "http";
-      const mapping = draft.rows.filter(row => row.from && row.to).map(row => {
+      const mapping = draft.rows.filter(row => (row.from || row.transform === "const") && row.to).map(row => {
         if (outbound) return { from: row.from, to: row.to, role: "field" };
-        if (row.role === "link" || row.role === "parent") return { from: row.from, to: row.lookupEntity, role: row.role, lookupEntity: row.lookupEntity, lookupBy: row.lookupBy };
-        if (row.role === "links") return { from: row.from, to: row.to, role: "links", lookupEntity: row.lookupEntity, lookupBy: row.lookupBy };
-        return { from: row.from, to: row.to, role: "field" };
+        const transform = row.transform === "const" ? "const:" + (row.constant || "") : (row.transform || "copy");
+        const valueMap = row.transform === "map" ? parseValueMap(row.valueMap) : undefined;
+        if (row.role === "link" || row.role === "parent") {
+          return { from: row.from, to: row.lookupEntity, role: row.role, lookupEntity: row.lookupEntity, lookupBy: row.lookupBy, onMiss: row.onMiss || "fail" };
+        }
+        if (row.role === "links") {
+          return { from: row.from, to: row.to, role: "links", lookupEntity: row.lookupEntity, lookupBy: row.lookupBy, onMiss: row.onMiss || "fail" };
+        }
+        return { from: row.from, to: row.to, role: "field", transform, valueMap };
       });
       const body = {
+        id: draft.id || undefined,
         name: draft.name,
         connectionId: draft.connectionId,
         direction: outbound ? "out" : "in",
@@ -672,6 +900,10 @@
         newPlural: draft.newPlural,
         externalIdField: draft.externalIdField,
         scheduleMinutes: Number(draft.scheduleMinutes),
+        dependsOn: draft.dependsOn,
+        cursorColumn: draft.cursorColumn,
+        enabled: draft.enabled !== false,
+        onDuplicate: draft.onDuplicate || "fail",
         mapping
       };
       const button = document.querySelector("#wizard button[type=submit]");
@@ -691,14 +923,30 @@
       const inbound = (state.queue || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(item.external_id)}</td><td>${esc(phrases[item.detail] || item.detail || item.status)}</td><td>${esc(item.updated_at)}</td></tr>`);
       const outbound = (state.deliveries || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.connection_id || "")}</td><td>Uscita</td><td>${esc(phrases[item.status] || item.status)}${item.detail ? " — " + esc(item.detail) : ""}</td><td>${esc(item.created_at)}</td></tr>`);
       const rows = inbound.concat(outbound).join("") || `<tr><td colspan="4">Ancora nessun passaggio.</td></tr>`;
+      const rejected = (state.rejects || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(item.external_id || "")}</td><td>${esc(item.detail)}</td><td>${esc(item.created_at)}</td></tr>`).join("") || `<tr><td colspan="4">Nessuna riga scartata.</td></tr>`;
+      const runs = (state.runs || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(phrases[item.status] || item.status)}</td><td>${esc(item.detail || "")}</td><td>${esc(item.created_at)}</td></tr>`).join("") || `<tr><td colspan="4">Nessun giro.</td></tr>`;
       shell("Attività", `
         <div class="page-header"><h1>Attività</h1></div>
-        <p class="lead">Gli ultimi ingressi in Espo e le ultime uscite verso un sistema esterno.</p>
+        <p class="lead">Gli ultimi ingressi in Espo, le uscite e le righe che non sono entrate.</p>
         <div class="panel table-wrap">
           <table>
             <caption>Ultimi passaggi</caption>
             <thead><tr><th scope="col">Integrazione</th><th scope="col">Record</th><th scope="col">Esito</th><th scope="col">Quando</th></tr></thead>
             <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="panel table-wrap">
+          <table>
+            <caption>Righe scartate</caption>
+            <thead><tr><th scope="col">Integrazione</th><th scope="col">Record</th><th scope="col">Motivo</th><th scope="col">Quando</th></tr></thead>
+            <tbody>${rejected}</tbody>
+          </table>
+        </div>
+        <div class="panel table-wrap">
+          <table>
+            <caption>Ultimi giri</caption>
+            <thead><tr><th scope="col">Integrazione</th><th scope="col">Esito</th><th scope="col">Dettaglio</th><th scope="col">Quando</th></tr></thead>
+            <tbody>${runs}</tbody>
           </table>
         </div>
       `);
@@ -733,17 +981,176 @@
     document.querySelector("#menu-toggle").addEventListener("click", () => document.body.classList.toggle("nav-open"));
     if (localStorage.getItem("nesso-nav") === "min") document.body.classList.add("nav-min");
 
+    const fieldTypes = [
+      ["varchar", "Testo"],
+      ["text", "Testo lungo"],
+      ["int", "Numero intero"],
+      ["float", "Numero"],
+      ["date", "Data"],
+      ["datetime", "Data e ora"],
+      ["bool", "Sì/no"],
+      ["enum", "Elenco"],
+      ["currency", "Valuta"],
+      ["email", "Email"],
+      ["phone", "Telefono"],
+      ["url", "Indirizzo web"]
+    ];
+    function typeLabel(type) {
+      const found = fieldTypes.find(item => item[0] === type);
+      return found ? found[1] : type;
+    }
+    function pipelinesOf(entityName) {
+      return (state.pipelines || []).filter(item => item.espo_entity === entityName || item.espoEntity === entityName);
+    }
+
+    function sheetsPage() {
+      const rows = catalog.map(entity => {
+        const uses = pipelinesOf(entity.name);
+        return `<tr>
+          <td><a href="#/schede/${esc(entity.name)}">${esc(entity.label)}</a></td>
+          <td><code>${esc(entity.name)}</code></td>
+          <td>${uses.length ? uses.map(item => esc(item.name)).join(", ") : "nessuna"}</td>
+        </tr>`;
+      }).join("");
+      shell("Schede", `
+        <div class="page-header">
+          <div class="page-title"><h1>Schede</h1></div>
+          <div class="header-buttons"><a class="btn" href="#/schede/nuova">Nuova scheda</a></div>
+        </div>
+        <p class="lead">Qui si vede che cosa c'è in Espo e quali integrazioni lo toccano. Una scheda nuova, e i suoi campi, si aggiungono da qui.</p>
+        <div class="table-wrap panel">
+          <table>
+            <caption>Schede di Espo</caption>
+            <thead><tr><th>Nome</th><th>Nome tecnico</th><th>Integrazioni</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="3">Nessuna scheda ancora.</td></tr>`}</tbody>
+          </table>
+        </div>
+      `);
+    }
+
+    function newSheetPage() {
+      shell("Nuova scheda", `
+        <div class="page-header">
+          <div class="page-title"><h1>Nuova scheda</h1></div>
+          <div class="header-buttons"><a class="btn secondary" href="#/schede">Annulla</a></div>
+        </div>
+        <form class="panel" id="sheet-form">
+          <p id="form-error" class="error" role="alert"></p>
+          <label>Nome singolare<input name="singular" required maxlength="60" placeholder="Consegna"></label>
+          <label>Nome plurale<input name="plural" required maxlength="60" placeholder="Consegne"></label>
+          <p class="hint">Espo antepone C al nome tecnico. Consegna diventa CConsegna. Nasce anche la chiave esterna.</p>
+          <div class="actions"><button type="submit">Crea la scheda</button></div>
+        </form>
+      `);
+      document.querySelector("#sheet-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const response = await fetch("/api/sheets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ singular: form.singular.value.trim(), plural: form.plural.value.trim() })
+        });
+        const data = await response.json();
+        if (!response.ok) return showError(data.error || "Non sono riuscito a creare la scheda.");
+        catalog.push({
+          name: data.name,
+          label: form.singular.value.trim(),
+          keyField: "externalKey",
+          fields: [
+            { name: "name", label: "Nome", type: "varchar" },
+            { name: "externalKey", label: "Chiave esterna", type: "varchar" }
+          ]
+        });
+        catalog.sort((a, b) => a.label.localeCompare(b.label, "it"));
+        location.hash = "#/schede/" + data.name;
+      });
+    }
+
+    function sheetPage(entityName) {
+      const entity = catalog.find(item => item.name === entityName);
+      if (!entity) return notFound();
+      const uses = pipelinesOf(entity.name);
+      const fields = entity.fields.map(field => `<tr>
+        <td>${esc(field.label)}</td>
+        <td>${esc(typeLabel(field.type))}</td>
+        <td><code>${esc(field.name)}</code></td>
+      </tr>`).join("");
+      const typeOptions = fieldTypes.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+      shell(entity.label, `
+        <div class="page-header">
+          <div class="page-title"><h1>${esc(entity.label)}</h1></div>
+          <div class="header-buttons"><a class="btn secondary" href="#/schede">Tutte le schede</a></div>
+        </div>
+        <p class="lead">Nome tecnico <code>${esc(entity.name)}</code>. ${uses.length ? "Toccata da " + uses.map(item => esc(item.name)).join(", ") + "." : "Nessuna integrazione la tocca."}</p>
+        <div class="table-wrap panel">
+          <table>
+            <caption>Campi</caption>
+            <thead><tr><th>Etichetta</th><th>Tipo</th><th>Nome tecnico</th></tr></thead>
+            <tbody>${fields || `<tr><td colspan="3">Nessun campo scrivibile.</td></tr>`}</tbody>
+          </table>
+        </div>
+        <form class="panel" id="field-form">
+          <h2>Nuovo campo</h2>
+          <p id="form-error" class="error" role="alert"></p>
+          <label>Etichetta<input name="label" required maxlength="80" placeholder="Data di chiusura"></label>
+          <label>Tipo<select name="type">${typeOptions}</select></label>
+          <label id="options-label">Valori dell'elenco, uno per riga<textarea name="options" placeholder="Aperta&#10;Chiusa"></textarea></label>
+          <label class="radios"><span><input type="checkbox" name="required"> Campo obbligatorio</span></label>
+          <div class="actions"><button type="submit">Aggiungi il campo</button></div>
+        </form>
+      `);
+      const optionsLabel = document.querySelector("#options-label");
+      const typeSelect = document.querySelector("#field-form select[name=type]");
+      const toggleOptions = () => { optionsLabel.hidden = typeSelect.value !== "enum"; };
+      typeSelect.addEventListener("change", toggleOptions);
+      toggleOptions();
+      document.querySelector("#field-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const response = await fetch("/api/sheets/" + encodeURIComponent(entity.name) + "/fields", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            label: form.label.value.trim(),
+            type: form.type.value,
+            options: form.options.value,
+            required: form.required.checked
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) return showError(data.error || "Non sono riuscito ad aggiungere il campo.");
+        entity.fields.push({ name: data.name, label: form.label.value.trim(), type: form.type.value });
+        entity.fields.sort((a, b) => a.label.localeCompare(b.label, "it"));
+        render();
+      });
+    }
+
     function render() {
       const path = pathOf();
       if (path === "/") return home();
       if (path === "/collegamenti") return connectionsPage();
-      if (path === "/collegamenti/nuovo") return connectionFormPage();
+      if (path === "/collegamenti/nuovo") return connectionFormPage(null);
+      if (path.startsWith("/collegamenti/modifica/")) {
+        const item = connectionOf(path.split("/")[3]);
+        if (!item) return notFound();
+        return connectionFormPage(item);
+      }
       if (path === "/integrazioni") return integrationsPage();
       if (path.startsWith("/integrazioni/nuova")) {
         const step = Number(path.split("/")[3] || "1");
         return wizard(step);
       }
+      if (path.startsWith("/integrazioni/modifica/")) {
+        const bits = path.split("/");
+        const item = (state.pipelines || []).find(row => row.id === bits[3]);
+        if (!item) return notFound();
+        if (!draft || draft.id !== item.id) draft = draftFromPipeline(item);
+        return wizard(Number(bits[4] || "1"));
+      }
       if (path === "/attivita") return activityPage();
+      if (path === "/schede") return sheetsPage();
+      if (path === "/schede/nuova") return newSheetPage();
+      if (path.startsWith("/schede/")) return sheetPage(decodeURIComponent(path.split("/")[2] || ""));
       notFound();
     }
 
@@ -763,7 +1170,8 @@
     }
 
     window.addEventListener("hashchange", () => {
-      if (!pathOf().startsWith("/integrazioni/nuova")) draft = null;
+      const here = pathOf();
+      if (!here.startsWith("/integrazioni/nuova") && !here.startsWith("/integrazioni/modifica")) draft = null;
       refresh();
     });
     if (!location.hash) location.hash = "#/";

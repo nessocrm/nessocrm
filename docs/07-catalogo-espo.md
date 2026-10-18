@@ -21,15 +21,19 @@ I collegamenti entrano nel catalogo e non nel menu dei campi semplici. La pagina
 | Tipo nel catalogo | Legame Espo | Nella pagina |
 |---|---|---|
 | `link` | belongsTo | Colleghiamo una scheda |
-| `linkMultiple` | hasMany | Colleghiamo più record |
+| `linkMultiple` | hasMany | Colleghiamo più record. Se il collegamento c'è solo fra i link e non fra i campi, entra lo stesso |
 | `linkParent` | linkParent | È un'attività appesa a una scheda |
-| `file` | file | Resta fra i campi. Il valore è un file da caricare |
+| `file` | file | Resta fra i campi. Il file si carica come `data:...;base64,...` su `Attachment`, poi si scrive l'id |
 
 `cExternalKey` e `externalKey`, se presenti, entrano con l'etichetta fissa «Chiave esterna», anche se I18n dicesse altro.
 
 L'elenco è ordinato per etichetta. Il catalogo intero è in memoria 120 secondi (`CATALOG`). `GET /api/catalog` lo restituisce insieme a `espoPublicUrl`.
 
 `keyField` della scheda è `externalKey` se `module == Custom` o `isCustom`, altrimenti `cExternalKey`. È il campo che l'integrazione userà come chiave, indipendentemente da ciò che l'utente abbina.
+
+Se `scopes.{scheda}.customizable` è falso, il campo non si crea. La chiave resta nella tabella `chiave` del motore e i collegamenti la risolvono da lì. È il caso di Team, DocumentFolder, KnowledgeBaseCategory, Role, EmailTemplate.
+
+Dalla schermata Schede il campo nuovo non è solo testo. Il tipo può essere testo, testo lungo, intero, numero, data, data e ora, sì/no, elenco, valuta, email, telefono o indirizzo web. L'elenco porta i suoi valori. L'obbligo si manda a Espo insieme al campo.
 
 ## Creare il campo chiave
 
@@ -70,7 +74,7 @@ Un'integrazione in uscita non crea il campo. Se si abbina `cExternalKey` e il ca
 - cadenza 0, 5, 15 o 60
 - se c'è un collegamento, esiste e il verso coincide col kind
 
-Le regole salvate dalla pagina e da questo controllo hanno `transform: copy`. Il seme, inserito a mano nel codice, tiene `const`. Un aggiornamento di quelle righe via `save_pipeline` le trasformerebbe in copie e perderebbe la costante, perché il pulitore non legge `transform` dal corpo: lo forza a `copy`.
+Il salvataggio conserva `copy`, `split_first`, `split_last`, `const:…`, `map` e `file`. Una mappa valori sta in `valueMap`. Un campo telefono riceve `kind: phone` e il numero italiano diventa `+39…`. Un collegamento ha `onMiss`: `fail`, `skip` o `create`. Risalvare un'integrazione non ricrea il lookup se verso quella scheda ne esiste già uno solo. La chiave `{id}:{colonna}` non viene riscritta se la colonna identità non cambia.
 
 In ingresso il `key_template` viene sempre riscritto come `{id}:{campo}`. Non si può scegliere un altro formato dalla API. Il seme ha formati propri (`anagrafica:{codice}`, `modulo-web:{id}`) solo perché non è passato da `save_pipeline`.
 

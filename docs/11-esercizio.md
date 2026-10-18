@@ -63,7 +63,7 @@ Uscita. Integrazione su un collegamento HTTP, «Esegui ora». Con URL vuoto, «U
 | La pagina non elenca schede | Espo non è ancora su, oppure `/api/catalog` è 400. Health dice se l'admin risponde |
 | Salva collegamento database fallisce | testo nel modulo: host, permesso, oppure «è ammessa una sola SELECT» |
 | Esegui ora sul database segna scartate | `last_detail` ha il primo motivo. Il caso noto è il nome account già usato da un'altra chiave |
-| Il CSV non si sposta | una riga ha alzato. Il file è ancora nella cartella, il dettaglio è l'errore |
+| Una riga CSV non entra | il file è comunque in `elaborati/`. La riga è in Attività, tabella Righe scartate |
 | Esegui ora dice che un'esecuzione è già in corso | un altro giro, o il pianificatore, tiene `RUN_LOCK` |
 | L'uscita rimanda sempre gli stessi record | il cursore non avanza. Succede se i record letti non hanno `modifiedAt` |
 | L'uscita non rimanda un record che in Espo c'è già | il suo `modifiedAt` è minore o uguale al cursore in `cursor_state` |

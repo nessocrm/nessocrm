@@ -1,6 +1,8 @@
 # Stato della prova
 
-Fotografia letta da `motore.sqlite` e dal database `gestionale` il 17/10/2026, nel pomeriggio. Sono dati inventati su Espo vuoto, più un lead inserito con una chiamata all'integrazione di seme. Nessuna riga viene dal dump di produzione.
+Questa pagina è la fotografia del primo seme, letta il 17/10/2026 nel pomeriggio. Non è il demo che gira adesso. Il demo corrente è Gruppo Meridia, nel capitolo omonimo.
+
+Fotografia letta da `motore.sqlite` e dal database `gestionale`. Sono dati inventati su Espo vuoto, più un lead inserito con una chiamata all'integrazione di seme. Nessuna riga viene dal dump di produzione.
 
 Gli id Espo sono quelli di questa installazione. Un volume ricreato ne avrà altri.
 

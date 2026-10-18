@@ -62,7 +62,75 @@ def seed_demo(connect, save_connection, save_pipeline, run_pipeline, ingest, sca
         promuovi.finish(connect, espo_request)
     except Exception as error:
         print("[motore] scheda plus", error)
-    complete_legacy(connect, save_connection, save_pipeline, run_pipeline, espo_request)
+    try:
+        complete_legacy(connect, save_connection, save_pipeline, run_pipeline, espo_request)
+    finally:
+        ensure_order(connect)
+        ensure_euro(connect, espo_request)
+
+
+DEMO_ORDER = {
+    "fornitori-e-partner-erp": "anagrafiche-clienti-erp",
+    "rubrica-commerciale": "fornitori-e-partner-erp",
+    "sedi-dei-clienti": "rubrica-commerciale",
+    "offerte-commerciali": "sedi-dei-clienti",
+    "contratti-quadro": "offerte-commerciali",
+    "commesse-di-lavoro": "contratti-quadro",
+    "interventi-in-campo": "commesse-di-lavoro",
+    "fatture-clienti": "commesse-di-lavoro",
+    "ticket-di-assistenza": "rubrica-commerciale",
+}
+
+
+def ensure_euro(connect, espo_request) -> None:
+    status, result = espo_request(
+        "PUT",
+        "/api/v1/Settings",
+        {"defaultCurrency": "EUR", "baseCurrency": "EUR", "currencyList": ["EUR", "USD"]},
+    )
+    if status not in (200, 201):
+        print("[motore] valuta", status, result)
+    code, offers = espo_request(
+        "GET",
+        "/api/v1/COfferta",
+        query={"select": "id,amountCurrency", "maxSize": "50"},
+    )
+    if code == 200 and isinstance(offers, dict):
+        for row in offers.get("list") or []:
+            if row.get("amountCurrency") == "EUR" or not row.get("id"):
+                continue
+            put, body = espo_request("PUT", f"/api/v1/COfferta/{row['id']}", {"amountCurrency": "EUR"})
+            if put not in (200, 201):
+                print("[motore] valuta offerta", row["id"], put, body)
+    with connect() as conn:
+        found = conn.execute(
+            "SELECT mapping_json FROM pipeline WHERE id = 'offerte-commerciali'"
+        ).fetchone()
+        if found is None:
+            return
+        rules = json.loads(found["mapping_json"])
+        if any(item.get("to") == "amountCurrency" for item in rules):
+            return
+        rules.append({"from": "_const", "to": "amountCurrency", "transform": "const:EUR"})
+        conn.execute(
+            "UPDATE pipeline SET mapping_json = ? WHERE id = 'offerte-commerciali'",
+            (json.dumps(rules, ensure_ascii=False),),
+        )
+
+
+def ensure_order(connect) -> None:
+    with connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(pipeline)")}
+        if "depends_on" not in columns:
+            return
+        for pipeline_id, parent in DEMO_ORDER.items():
+            conn.execute(
+                """
+                UPDATE pipeline SET depends_on = ?
+                WHERE id = ? AND (depends_on IS NULL OR depends_on = '')
+                """,
+                (parent, pipeline_id),
+            )
 
 
 def load_promuovi():
@@ -516,6 +584,7 @@ def complete_legacy(connect, save_connection, save_pipeline, run_pipeline, espo_
         return
     load_sql(sql_path)
     ensure_roles(espo_request)
+    relax_target_list(connect)
     ids = ensure_org_links(connect, save_connection)
     ensure_org_rules(connect, save_pipeline, ids)
     for pipeline_id in (
@@ -538,7 +607,8 @@ def complete_legacy(connect, save_connection, save_pipeline, run_pipeline, espo_
         except Exception as error:
             print("[motore] demo organizzazione", pipeline_id, error)
             return
-    stamp_visibility(espo_request)
+    link_fair_contacts(connect, espo_request)
+    stamp_visibility(espo_request, connect)
     with connect() as conn:
         conn.execute(
             "UPDATE pipeline SET last_detail = TRIM(COALESCE(last_detail, '') || ' ' || ?) WHERE id = 'modelli-email'",
@@ -656,7 +726,6 @@ def ensure_org_rules(connect, save_pipeline, ids: dict) -> None:
         ("Liste fiera", "TargetList", [
             {"from": "nome", "to": "name"},
             {"from": "descrizione", "to": "description"},
-            links("chiave_contatti", "Contact", "cExternalKey", "contacts"),
             links("chiave_team", "Team", "cExternalKey", "teams"),
         ]),
         ("Campagna fiera", "Campaign", [
@@ -696,6 +765,44 @@ def ensure_org_rules(connect, save_pipeline, ids: dict) -> None:
 
 def access(read: str, edit: str, delete: str = "no", create: str = "yes") -> dict:
     return {"create": create, "read": read, "edit": edit, "delete": delete, "stream": read}
+
+
+def relax_target_list(connect) -> None:
+    # Espo rifiuta contactsIds nel corpo della lista: il legame si fa dopo, un contatto alla volta.
+    with connect() as conn:
+        row = conn.execute("SELECT mapping_json FROM pipeline WHERE id = 'liste-fiera'").fetchone()
+        if row is None:
+            return
+        rules = json.loads(row["mapping_json"])
+        kept = [item for item in rules if item.get("to") != "contactsIds"]
+        if len(kept) == len(rules):
+            return
+        conn.execute(
+            "UPDATE pipeline SET mapping_json = ? WHERE id = 'liste-fiera'",
+            (json.dumps(kept, ensure_ascii=False),),
+        )
+
+
+def link_fair_contacts(connect, espo_request) -> None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT espo_id FROM chiave WHERE entity = 'TargetList' AND external_key = 'liste-fiera:LST-1'"
+        ).fetchone()
+    if row is None:
+        print("[motore] lista fiera assente")
+        return
+    for code in ("CNT-4101", "CNT-4102", "CNT-4107", "CNT-4110", "CNT-221"):
+        contact = espo_find(espo_request, "Contact", "cExternalKey", f"rubrica-commerciale:{code}")
+        if not contact:
+            print("[motore] lista fiera, contatto assente", code)
+            continue
+        status, result = espo_request(
+            "POST",
+            f"/api/v1/TargetList/{row['espo_id']}/contacts",
+            {"id": contact},
+        )
+        if status not in (200, 201):
+            print("[motore] lista fiera", code, status, result)
 
 
 def ensure_roles(espo_request) -> None:
@@ -738,10 +845,12 @@ def ensure_roles(espo_request) -> None:
         for name in [
             "Account", "Contact", "Lead", "COfferta", "Case", "Meeting", "Call", "Task",
             "Document", "DocumentFolder", "Campaign", "TargetList", "KnowledgeBaseArticle",
-            "KnowledgeBaseCategory", "EmailTemplate", "User", "Team",
+            "KnowledgeBaseCategory", "EmailTemplate", "Team",
             "CSede", "CContratto", "CCommessa", "CIntervento", "CFattura",
         ]
     }
+    # Espo non ammette «modifica tutti» sugli utenti: al massimo il proprio.
+    direzione["User"] = access("all", "own")
     specs = [
         ("Vendite", "team", vendite),
         ("Assistenza", "team", assistenza),
@@ -797,15 +906,25 @@ def espo_find(espo_request, entity: str, field: str, value: str):
     return rows[0]["id"] if rows else None
 
 
-def stamp_visibility(espo_request) -> None:
-    teams = {key: espo_find(espo_request, "Team", "cExternalKey", key) for key in (NE, LOM, ASS, AMM, DIR)}
-    users = {key: espo_find(espo_request, "User", "cExternalKey", key) for key in (CHIARA, MARCO, ELENA, DAVIDE)}
+def stamp_visibility(espo_request, connect) -> None:
+    def locate(entity: str, field: str, value: str):
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT espo_id FROM chiave WHERE entity = ? AND external_key = ?",
+                (entity, value),
+            ).fetchone()
+        if row:
+            return row["espo_id"]
+        return espo_find(espo_request, entity, field, value)
+
+    teams = {key: locate("Team", "cExternalKey", key) for key in (NE, LOM, ASS, AMM, DIR)}
+    users = {key: locate("User", "cExternalKey", key) for key in (CHIARA, MARCO, ELENA, DAVIDE)}
     missing = [key for key, value in {**teams, **users}.items() if not value]
     if missing:
         raise RuntimeError("visibilità senza record: " + ", ".join(missing))
 
     def put(entity: str, key_field: str, key: str, team_keys: list[str], user_key: str | None = None) -> None:
-        record = espo_find(espo_request, entity, key_field, key)
+        record = locate(entity, key_field, key)
         if not record:
             print("[motore] visibilità, record assente", entity, key)
             return

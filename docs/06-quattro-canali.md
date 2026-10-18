@@ -29,7 +29,7 @@ Il token è confrontato in tempo costante (`hmac.compare_digest`). Collegamento 
 
 Se nessuna integrazione in ingresso punta a questo id: HTTP 400 «nessuna integrazione usa questo collegamento». Il corpo non viene conservato.
 
-Per ogni integrazione in ingresso, per ogni record dizionario, chiama `ingest`. Gli elementi che non sono oggetti si saltano. A ciclo concluso senza errori, `mark_run` con «N record ricevuti via webhook». N è la lunghezza del corpo, non il numero di ingest riusciti.
+Per ogni integrazione in ingresso attiva, per ogni record, chiama l'ingresso. Una riga che fallisce viene scritta in `scarto` e il lotto continua. Un elemento che non è un oggetto è uno scarto. A fine lotto `mark_run` riporta create, aggiornate, invariate e scartate. Un'integrazione in pausa non riceve il webhook.
 
 «Esegui ora» non simula un payload. Risponde `{"waiting": true, "url": "..."}` e scrive lo stesso stato `ok` con «in attesa che il sistema esterno chiami l'indirizzo». La pagina mostra «In attesa di chiamate sull'indirizzo del webhook.»
 
@@ -54,17 +54,17 @@ Il motore non esegue il testo così com'è. Lo avvolge:
 SELECT * FROM ( {query} ) AS sorgente LIMIT {n}
 ```
 
-`n` è 5 durante il salvataggio, 500 durante l'esecuzione. Il salvataggio quindi fallisce se l'host non risponde, se l'utente non ha il permesso, o se la query è invalida. Se risponde, la API restituisce `columns`, i nomi della prima riga, oppure lista vuota se la prova non ha righe. La connessione usa `connect_timeout` 8 secondi e `read_timeout` 30. Cursore dizionario. Ogni valore non nullo diventa stringa.
+`n` è 5 durante il salvataggio, 500 durante l'esecuzione, 5 nella prova a secco. Se l'integrazione ha una colonna di variazione, la SELECT è ordinata per quella colonna e per la colonna identità, e il giro dopo riparte dall'ultimo valore letto, anche se è uguale, usando l'identità come spareggio. I nomi colonna sono solo lettere, cifre e trattino basso. Il salvataggio fallisce se l'host non risponde, se l'utente non ha il permesso, o se la query è invalida. Se risponde, la API restituisce `columns` e le salva nel collegamento, così il passo di abbinamento le propone. La connessione usa `connect_timeout` 8 secondi e `read_timeout` 30. Cursore dizionario. Ogni valore non nullo diventa stringa.
 
 Non c'è un parser SQL oltre la regex iniziale. Una SELECT che contiene la parola insert in una stringa passa. Una seconda istruzione no, perché il punto e virgola è vietato. `INSERT`, `UPDATE`, `DELETE` a inizio testo no.
 
 Esecuzione: legge fino a 500 righe, ingest per riga, prosegue dopo l'errore. Dettaglio:
 
 ```text
-{n} righe dal database, {c} create, {u} aggiornate, {f} scartate. {primo errore}
+{n} righe dal database, {c} create, {u} aggiornate, {i} invariate, {f} scartate. {primo errore}
 ```
 
-Lo stato è `errore` quando `f > 0` e `c = 0` e `u = 0`. Le righe `invariato` non alzano `c` né `u`. Vedi il capitolo sull'ingresso per il giro successivo dei clienti.
+Lo stato è `errore` solo quando ci sono scarti e non c'è nessuna riga creata, aggiornata o invariata. Ogni scarto resta nella tabella `scarto`.
 
 Host usabile da dentro il contenitore per la prova: `db`. Database `gestionale`, utente `espocrm`, password `locale-db`. La query salvata è:
 
@@ -98,7 +98,7 @@ Lettura:
 - chiavi `None` (colonne in più senza nome) vengono tolte
 - una cella vuota resta stringa vuota, e in ingresso un campo mappato vuoto non si scrive
 
-Dopo che ogni riga di ogni file è stata ingerita senza eccezioni, ogni file sorgente viene rinominato in `elaborati/{AAAAMMGGHHMMSS}-{nome}`. I file già spostati in quel giro non si spostano due volte. Se l'ingest di una riga alza, lo spostamento non parte.
+Il separatore è la virgola, oppure il punto e virgola se nella prima riga i punti e virgola sono di più. Una riga che fallisce va in `scarto` e le altre continuano. A fine giro ogni file letto viene rinominato in `elaborati/{AAAAMMGGHHMMSS}-{nome}`, anche se qualche riga è stata scartata. Così il file non resta bloccato sulla stessa riga.
 
 Nella prova: `scambio/file-notturno/elaborati/20261017105401-contatti.csv`, una riga, contatto Sara Verdi, id esterno `CNT-20`, integrazione `file-notturno-verso-contatti`.
 

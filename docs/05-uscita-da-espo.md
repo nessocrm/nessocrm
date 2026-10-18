@@ -19,29 +19,11 @@ Un valore `None` nel record Espo non entra nel JSON. Una stringa vuota, se Espo 
 
 ## Lettura
 
-Il cursore parte da `1970-01-01 00:00:00` se l'integrazione non ha ancora una riga in `cursor_state`.
+Il cursore parte da `1970-01-01 00:00:00` se l'integrazione non ha ancora una riga in `cursor_state`. Il valore salvato è `modifiedAt`, poi una tabulazione, poi l'id Espo. Un cursore vecchio, senza tabulazione, viene letto lo stesso: al giro successivo i record con quell'istante possono uscire un'altra volta, poi il formato nuovo li distingue.
 
-```
-GET /api/v1/{Scheda}
-  select = campi from, separati da virgola, ordinati
-  maxSize = 50
-  orderBy = modifiedAt
-  order = asc
-  where[0][type] = after
-  where[0][attribute] = modifiedAt
-  where[0][value] = cursore
-```
+La lettura è a pagine da 50. Prima completa i record con lo stesso `modifiedAt` del cursore e id maggiore. Poi prende i `modifiedAt` successivi. Se una pagina è piena di uno stesso istante, continua per id, così nessuno resta fuori. Un giro si ferma a 1000 record. Il select include sempre `id` e `modifiedAt`.
 
-`after` è successivo, non «uguale o successivo». Un record con `modifiedAt` identico al cursore non esce un'altra volta. Cinquanta è il tetto di un giro. Se ne esistono di più, il cursore avanza all'ultimo dei cinquanta e il giro dopo prende i successivi, a patto che il loro `modifiedAt` sia maggiore.
-
-Per ogni record:
-
-1. costruisce il JSON con i nomi `to`
-2. inserisce una riga in `sink_item` (integrazione, id Espo, JSON, ora)
-3. se `modifiedAt` è presente e maggiore del cursore di lavoro, lo tiene
-4. se ne ha esportato almeno uno, salva quel cursore
-
-Poi restituisce `exported`, `cursor`, `total` (il totale che Espo dichiara per il filtro) e `records`.
+`/api/pull` scrive il sink e poi il cursore, perché la consegna è la lettura. L'invio HTTP non usa questo percorso.
 
 Cursori presenti il 17/10/2026:
 
@@ -51,7 +33,7 @@ Cursori presenti il 17/10/2026:
 | `contatti-da-espo` | 2026-10-17 10:14:23 |
 | `lead-verso-portale` | 2026-10-17 10:53:11 |
 
-`lead-verso-portale` non chiede `modifiedAt` nell'abbinamento. Il cursore è comunque avanzato: Espo ha restituito `modifiedAt` insieme ai campi chiesti, e il motore lo ha letto. Se una versione di Espo omettesse `modifiedAt` quando non è in `select`, il cursore resterebbe fermo e ogni giro rimanderebbe gli stessi 50. Il select non lo aggiunge da sé.
+Il select chiede sempre `id` e `modifiedAt`, anche se l'abbinamento non li mappa. Se un record non ha `modifiedAt`, il cursore non avanza su quel record.
 
 ## Invio
 
@@ -61,14 +43,14 @@ Solo il kind `http` invia. L'indirizzo è `config.url` se è valorizzato. Se è 
 http://127.0.0.1:8091/inbox/{id collegamento}/{token}
 ```
 
-È un POST JSON, header `Content-Type: application/json`, timeout 20 secondi, senza altro header di autenticazione. Il token sta nel percorso solo quando la destinazione è la casella. Una destinazione esterna riceve il corpo nudo.
+È un POST JSON, header `Content-Type: application/json`, timeout 20 secondi. Sul collegamento si può aggiungere un Bearer, utente e password, oppure un'intestazione con nome e valore. Il token nell'indirizzo resta solo per la casella interna.
 
 Per ogni record, dopo un HTTP sotto 300:
 
 - una riga `delivery` con status `inviato`, dettaglio uguale all'URL, `pipeline_id` valorizzato
 - il contatore `sent` cresce
 
-Un HTTP da 300 in su, o un errore di rete, ferma il ciclo. I record già inviati in quel giro restano inviati. Il cursore è già stato salvato da `pull` prima del primo POST. I record letti e non ancora inviati non vengono ritentati al giro dopo, perché il loro `modifiedAt` non è più successivo al cursore.
+Un HTTP da 300 in su, o un errore di rete, ferma il ciclo. I record già inviati restano inviati e il cursore arriva all'ultimo di quelli. Il record che ha fallito, e i successivi, escono al giro dopo. Lo scarto sta in `scarto` e in `delivery` con status `errore`.
 
 `mark_run` scrive «N record inviati a {url}».
 
@@ -104,4 +86,4 @@ Token o id errati, o kind diverso da `http`: HTTP 401 «casella non valida». Il
 
 ## Che cosa l'uscita non fa
 
-Non cancella su Espo. Non manda gli eliminati. Non segue le relazioni (il contatto di un account, le opportunità). Non pagina oltre i 50 nello stesso giro. Non firma il POST. Non ritenta un invio fallito senza spostare il cursore all'indietro: il cursore non si sposta all'indietro da solo.
+Non cancella su Espo. Non manda gli eliminati. Non segue le relazioni. Un giro legge fino a 1000 record, a pagine da 50. Il POST può portare Bearer, basic o un'intestazione. Un invio fallito non fa avanzare il cursore oltre l'ultimo POST riuscito.

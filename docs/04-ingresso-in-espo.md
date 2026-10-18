@@ -33,7 +33,7 @@ Ogni regola legge `transform`.
 | `split_last` | tutto dopo il primo spazio. Una sola parola produce `None` e il campo non si scrive |
 | altro | errore «transform sconosciuto» |
 
-Una stringa vuota non viene scritta. Poi, se la chiave c'è, il motore aggiunge sempre `mapped[key_field] = chiave`, anche se l'abbinamento non cita quel campo. È il motivo per cui Giulia Costa ha `cExternalKey` pur mappando solo nome, cognome ed email.
+Una stringa vuota non viene scritta. Poi, se la chiave c'è e la scheda accetta il campo, il motore aggiunge `mapped[key_field] = chiave`, anche se l'abbinamento non cita quel campo. È il motivo per cui Giulia Costa ha `cExternalKey` pur mappando solo nome, cognome ed email. Se la scheda non è personalizzabile, la chiave non entra nel JSON: resta nella tabella `chiave`.
 
 Risultato mandato a Espo per quel lead:
 

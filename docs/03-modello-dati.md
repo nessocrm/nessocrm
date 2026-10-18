@@ -15,12 +15,16 @@ Una riga è un'integrazione.
 | `external_id_field` | obbligatorio | Colonna esterna che identifica il record. In uscita, se manca, il server scrive `id` |
 | `key_template` | obbligatorio | In ingresso `modulo-web:{id}`. In uscita stringa vuota |
 | `mapping_json` | obbligatorio | Lista di `{from, to, transform}` |
-| `key_field` | default `cExternalKey` | Campo Espo su cui si cerca e si scrive la chiave |
+| `key_field` | default `cExternalKey` | Campo Espo su cui si cerca e si scrive la chiave. Vuoto se la scheda non accetta campi nuovi: la chiave resta in `chiave` |
 | `connection_id` | nullo ammesso | Collegamento. Nessuna foreign key: il valore è controllato in scrittura |
 | `schedule_minutes` | default 0 | 0, 5, 15 o 60 |
 | `last_run` | nullo | `YYYY-MM-DD HH:MM:SS` locale del contenitore |
 | `last_status` | nullo | `ok` o `errore` |
 | `last_detail` | nullo | Testo, tagliato a 500 caratteri |
+| `depends_on` | nullo | Id di un'altra integrazione da eseguire prima |
+| `cursor_column` | nullo | Colonna di variazione del database in ingresso |
+| `enabled` | default 1 | 0 mette in pausa pianificatore e webhook |
+| `on_duplicate` | default `fail` | `fail` scarta il simile con un'altra chiave. `adopt` lo aggiorna |
 
 Le sei colonne da `key_field` in poi non c'erano nella prima creazione. `init_db` le aggiunge con `ALTER` se `PRAGMA table_info` non le vede. Un file vecchio si apre ancora.
 
@@ -57,7 +61,7 @@ Memoria dell'ingresso. Una riga per coppia integrazione + id esterno (`UNIQUE`).
 | `payload_json` | Corpo arrivato dal sistema esterno |
 | `mapped_json` | Corpo inviato a Espo, chiave inclusa |
 | `hash` | SHA-256 esadecimale di `mapped_json` con chiavi ordinate |
-| `status` | Oggi solo `synced`. Uno scarto non crea riga |
+| `status` | `synced` quando la riga è entrata. Lo scarto non sta qui: sta in `scarto` |
 | `espo_id` | Id del record Espo |
 | `detail` | `creato` o `aggiornato`, l'ultima azione che ha scritto |
 | `updated_at` | Ora dell'ultima scrittura andata a buon fine |
@@ -72,7 +76,15 @@ Appendice dell'uscita. Ogni record letto da Espo aggiunge una riga, anche se lo 
 
 ## cursor_state
 
-Una riga per integrazione in uscita. `cursor_value` è l'ultimo `modifiedAt` osservato. Se nessun record letto contiene `modifiedAt`, il cursore non avanza e il giro successivo rilegge gli stessi record.
+Una riga per integrazione. In uscita `cursor_value` è `modifiedAt`, una tabulazione, e l'id Espo. In ingresso, se c'è la colonna di variazione, è l'ultimo valore letto, una tabulazione, e l'identità esterna. Se manca `modifiedAt`, il cursore di uscita non avanza.
+
+## scarto
+
+Una riga per ogni record che non è entrato o non è uscito. Non ha unicità: lo stesso esterno può comparire più volte. `payload_json` è tagliato a 4000 caratteri, `detail` a 500. Cancellare l'integrazione cancella anche questi scarti.
+
+## run_log
+
+Un rigo per ogni giro, con esito e dettaglio. È lo stesso testo di `last_detail`, tenuto in coda. La pagina ne mostra gli ultimi venti.
 
 ## delivery
 
@@ -84,6 +96,20 @@ Diario dell'uscita e della casella. Non ha unicità. Una esecuzione che invia tr
 | `ricevuto` | `POST /inbox/{id}/{token}` |
 
 Cancellare un'integrazione non cancella `delivery`. Cancellare un collegamento nemmeno. Le righe restano come diario.
+
+## chiave
+
+Una riga lega la chiave esterna all'id Espo. Si scrive a ogni creazione e aggiornamento.
+
+| Colonna | Significato |
+|---|---|
+| `entity` | Scheda Espo, per esempio `Team` |
+| `external_key` | Chiave completa, per esempio `team-di-visibilita:TEAM-VNE` |
+| `espo_id` | Id del record |
+
+La chiave primaria è la coppia entità e chiave. Il riconoscimento di un collegamento guarda prima qui. Se la riga non c'è e la scheda ha il campo, si cerca ancora su Espo.
+
+Team, cartelle documenti, categorie della conoscenza, ruoli e modelli email non accettano campi nuovi. Su quelle schede `key_field` resta vuoto, la chiave non parte nel JSON e vive solo in questa tabella.
 
 ## Slug
 

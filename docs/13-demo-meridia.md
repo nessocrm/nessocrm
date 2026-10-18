@@ -33,10 +33,28 @@ Le offerte non restano sulla scheda standard Opportunity. All'avvio `demo/promuo
 
 ## Home di direzione
 
-Le preferenze dell'admin hanno la dashboard Direzione: pipeline aperto per fase, ticket aperti per priorità, offerte da chiudere, visite in agenda. Sono report dell'Advanced Pack.
+Le preferenze dell'admin hanno la dashboard Direzione: pipeline aperto per fase, ticket aperti per priorità, offerte da chiudere, visite in agenda. Sono report dell'Advanced Pack. Gli importi delle offerte sono in euro.
+
+## Organizzazione
+
+Dopo i processi, lo stesso avvio carica team, persone e documenti. I ruoli sono Vendite, Assistenza, Amministrazione e Direzione. Direzione legge tutto; sugli utenti può modificare solo il proprio, perché Espo non ammette «modifica tutti» su User.
+
+| Team | Chi ci entra | Vede |
+|---|---|---|
+| Vendite Nord-Est | Chiara Fabbri | Clienti e offerte del Nord-Est |
+| Vendite Lombardia e Sud | Marco Pellizzari | Clienti e offerte di Lombardia |
+| Assistenza impianti | Elena Sartori | Ticket, interventi, articoli |
+| Amministrazione | Davide Rinaldi | Contratti e fatture del proprio team |
+| Direzione | Laura Merli, e anche l'admin | L'insieme |
+
+Le cinque persone entrano in Espo con password `locale-utente`. Chiara non apre un cliente della Lombardia: la lettura di quel record restituisce zero righe.
+
+Gli otto PDF stanno in `demo/documenti/`. Finiscono su Document, in una cartella (Offerte, Contratti, Schede tecniche), collegati all'azienda e, quando c'è, all'opportunità. Ci sono anche compiti sulle offerte e sui ticket, quattro chiamate, tre articoli di conoscenza, la lista inviti MECSPE e la campagna omonima, due modelli email. I contatti della lista si agganciano dopo la creazione: Espo rifiuta l'elenco contatti nel corpo della lista.
+
+Team, cartelle, categorie e modelli email non accettano un campo chiave. La chiave di quei record sta nella tabella `chiave` del motore.
 
 ## Dove sono i dati
 
-Il database `meridia_erp` nasce sullo stesso MariaDB della prova. Lo schema e le righe sono in `demo/meridia.sql`. I file sono in `demo/csv/`. Il corpo del sito è in `demo/webhook/richieste-sito.json`.
+Il database `meridia_erp` nasce sullo stesso MariaDB della prova. Lo schema e le righe dei processi sono in `demo/meridia.sql`. Team, utenti e documenti sono in `demo/meridia-organizzazione.sql`. I file CSV sono in `demo/csv/`. I PDF sono in `demo/documenti/`. Il corpo del sito è in `demo/webhook/richieste-sito.json`.
 
 Per rifare la demo da zero si fermano i contenitori e si cancellano i volumi di questo compose, poi si rilancia. I volumi tengono Espo e la configurazione già caricata.

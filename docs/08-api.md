@@ -124,6 +124,18 @@ Errori tipici: «manca il nome del collegamento», «tipo di collegamento non ri
 
 Le integrazioni che lo citavano restano, con collegamento vuoto. 404 se la delete non tocca righe.
 
+## POST /api/sheets
+
+Crea una scheda Espo. Il corpo è `singular` e `plural`. La risposta ha `name`, il nome tecnico (`C` più il singolare). Nasce anche il campo chiave esterna.
+
+## POST /api/sheets/{nome}/fields
+
+Aggiunge un campo a una scheda che Espo lascia personalizzare. Il corpo ha `label`, `type` e, se serve, `options` e `required`.
+
+`type` è uno di `varchar`, `text`, `int`, `float`, `date`, `datetime`, `bool`, `enum`, `currency`, `email`, `phone`, `url`. Per `enum`, `options` è un elenco oppure un testo con un valore per riga. `required` vero marca il campo obbligatorio.
+
+Il nome tecnico lo ricava l'etichetta. Sulle schede standard Espo antepone `c`. Il campo viene appeso al dettaglio e all'elenco. Se la scheda non è personalizzabile, la risposta è 400.
+
 ## POST /api/pipelines
 
 ```json
@@ -171,18 +183,30 @@ Errori tipici: «manca il nome dell'integrazione», «scegli la scheda Espo», �
 
 ## POST /api/pipelines/{id}/run
 
-Il corpo è ignorato. La risposta dipende dal canale.
+Corpo facoltativo `{"withDependencies": true}`. Se è vero, prima parte l'integrazione indicata in `dependsOn`, e la sua, a catena. La risposta dipende dal canale.
 
 | Canale | Corpo di successo |
 |---|---|
-| nessuno, uscita | il risultato di pull: `exported`, `cursor`, `total`, `records` |
+| nessuno, uscita | il risultato di pull: `exported`, `cursor`, `records` |
 | nessuno, ingresso | 400 «collega un sistema esterno prima di eseguire» |
 | webhook | `{"waiting": true, "url": "..."}` |
 | database | `{"rows": 3, "created": 2, "updated": 0, "failed": 1}` |
-| csv | `{"rows": 1, "results": 1}` |
-| http | `{"sent": 3, "url": "http://127.0.0.1:8091/inbox/..."}` |
+| csv | `rows`, `created`, `updated`, `unchanged`, `failed` |
+| http | `{"sent": 3, "url": "...", "failed": false}` |
 
 409 di concorrenza sul lucchetto: 400 «un'esecuzione è già in corso». Anche in quel caso, se l'eccezione esce da `run_pipeline`, `mark_run` segna errore. Il `finally` rilascia il lucchetto.
+
+## POST /api/pipelines/{id}/dry
+
+Legge al massimo cinque righe e restituisce `rows`, ognuna con `mapped` oppure `status: scartato`. Non scrive su Espo. Un lookup mancante con politica «crea» compare come `nuovo:valore` e il record non nasce. Il webhook risponde che non ha righe da leggere.
+
+## POST /api/pipelines/{id}/enabled
+
+Corpo `{"enabled": false}` mette in pausa. `true` riattiva. La pausa vale per il pianificatore e per il webhook. «Esegui ora» parte lo stesso.
+
+## GET /api/export e POST /api/import
+
+Lo scarico è l'elenco dei collegamenti, senza password, token e valori di intestazione, e l'elenco delle integrazioni con la mappa già compilata. Il caricamento ripristina quel file. Le password vuote, se il collegamento esiste già, restano quelle di prima. L'import di un'integrazione scrive la mappa così com'è, senza ricreare i campi su Espo.
 
 ## DELETE /api/pipelines/{id}
 
@@ -190,7 +214,7 @@ Il corpo è ignorato. La risposta dipende dal canale.
 {"deleted": "lead-verso-portale"}
 ```
 
-Cancella coda, sink e cursore di quell'id. Non cancella i record su Espo e non cancella `delivery`.
+Cancella coda, sink, cursore, scarti e giornale dei giri di quell'id. Non cancella i record su Espo e non cancella `delivery`.
 
 ## POST /hook/{id}/{token}
 

@@ -110,10 +110,10 @@ Universale, qui, ha un senso preciso.
 - I tipi di canale sono quattro. Non c'è SFTP, non c'è Postgres, non c'è una coda, non c'è OAuth.
 - Il database letto è MySQL o MariaDB, e solo in SELECT.
 - Il motore non scrive sul sistema sorgente.
-- Se Espo rifiuta un record perché ne esiste uno simile con un'altra chiave, la riga viene scartata. Non c'è una politica da scegliere.
+- Se Espo rifiuta un record perché ne esiste uno simile con un'altra chiave, la riga viene scartata, salvo che l'integrazione sia impostata per aggiornare quel record.
 - La cadenza ha quattro valori: 0, 5, 15, 60 minuti.
 - Dalla pagina non si modifica un oggetto già creato. Si cancella e si ricrea. L'API, se riceve un id esistente, lo aggiorna.
-- Il modulo della pagina salva copie di valori e collegamenti. Le trasformazioni `const` e lo spezzamento del nome restano nel codice, non nel modulo.
+- Il modulo della pagina salva copia, prima parola, resto del testo, valore fisso e mappa dei valori.
 
 ## Che cosa l'app non è
 
