@@ -8,7 +8,7 @@ L'applicazione è un middleware. Da un lato c'è EspoCRM, dall'altro un sistema 
 
 | Capitolo | Cosa ci trovi |
 |---|---|
-| [Progetto](00-progetto.md) | Nome, prima versione, difetti noti, evolutiva non ancora fatta |
+| [Progetto](00-progetto.md) | Nome, prima versione, voci archiviate, confine, evolutive aperte |
 | [Prodotto](01-prodotto.md) | I due oggetti dell'app, il giro di un record, che cosa significa «qualunque sistema» in questa versione |
 | [Architettura](02-architettura.md) | Processi, rete, volumi, avvio, confine con il database di Espo |
 | [Modello dati](03-modello-dati.md) | SQLite: tabelle, slug, cancellazioni, che cosa sopravvive |
@@ -23,5 +23,6 @@ L'applicazione è un middleware. Da un lato c'è EspoCRM, dall'altro un sistema 
 | [Token GitHub](12-token-github.md) | Token per le issue, da fare quando serve |
 | [Demo Meridia](13-demo-meridia.md) | Demo da impresa: processi e dati del Gruppo Meridia |
 | [Marchio](14-marchio.md) | Marchio, lockup e file in `assets/logo` |
+| [Adozione](15-adozione.md) | Funzioni che farebbero scegliere Nesso a un'azienda |
 
 L'avvio dello stack è nel README della root del repository. La scheda breve, sempre nella root, è `motore.md`.

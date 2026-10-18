@@ -27,7 +27,7 @@ Un **collegamento** è il canale. Un'**integrazione** è la regola: quale colleg
 
 La scheda non è scritta nel codice. Nesso legge il metadata di Espo e propone le schede con tab e i campi scrivibili.
 
-La scheda si può anche creare da Nesso, durante una integrazione nuova, al passo «Scheda di Espo», voce «Una scheda che ancora non esiste». Espo antepone `C` al nome: Consegna diventa `CConsegna`. Su quella scheda nascono la chiave esterna, i campi abbinati (testo) e il lookup verso un'altra scheda. Il lookup è many-to-one. Se il record collegato non c'è, si sceglie: scartare la riga, lasciare il legame vuoto, oppure creare il record.
+La scheda si crea dalla schermata Schede, con singolare e plurale, oppure ancora dal passo «Scheda di Espo» di un'integrazione nuova. Espo antepone `C` al nome: Consegna diventa `CConsegna`. Su quella scheda nascono la chiave esterna e i campi abbinati. Dalla schermata Schede il campo nuovo ha il tipo vero. Dal passo dell'integrazione i campi abbinati nascono ancora come testo. Il lookup verso un'altra scheda è many-to-one. Il lookup è many-to-one. Se il record collegato non c'è, si sceglie: scartare la riga, lasciare il legame vuoto, oppure creare il record.
 
 L'identità di un record in ingresso è `{id integrazione}:{valore esterno}`. Sulle schede standard il campo è `cExternalKey`. Sulle schede create da Nesso è `externalKey`. Sulle schede che Espo non lascia personalizzare (team, cartelle, categorie, ruoli, modelli email) la chiave sta solo nella tabella `chiave` del motore. Lo stesso valore, con gli stessi campi, non richiama Espo: resta `invariato`. Se i campi cambiano, Nesso fa `PUT` sullo stesso record.
 
@@ -41,7 +41,6 @@ L'istanza locale è l'immagine pubblica `espocrm/espocrm:10.0`, installata vuota
 
 ### Difetti noti di questa versione
 
-- La creazione della scheda è dentro il passo 2 dell'integrazione. Non ha una schermata propria.
 - Se Espo non restituisce `modifiedAt`, il cursore di uscita non si muove e il giro dopo rimanda gli stessi record.
 - `/api/pull` scrive il sink e avanza il cursore, perché lì la consegna è la lettura stessa. L'invio HTTP no: il cursore si muove solo dopo i POST riusciti.
 - Gira una esecuzione alla volta. La seconda riceve «un'esecuzione è già in corso».
@@ -50,157 +49,109 @@ L'istanza locale è l'immagine pubblica `espocrm/espocrm:10.0`, installata vuota
 - Il pianificatore non è stato osservato per un ciclo intero da 15 minuti.
 - Non ci sono test automatici.
 
-## Evolutiva, non ancora fatta
+## Archiviate
 
-Ogni voce è lavoro da fare. Quello che il 18 ottobre è entrato nel motore non è più in questo elenco: giornale degli scarti, CSV e webhook che proseguono, cursore in ingresso se si indica la colonna, pagine in uscita, ordine fra integrazioni, lookup che può restare vuoto o creare il padre, trasformazioni e mappa valori in pagina, telefono in forma internazionale, prova a secco, modifica, pausa, credenziali sull'uscita HTTP, scarico della configurazione.
+Chiuse. Non sono più lavoro.
 
-Questo elenco è il tubo. Non basta a rendere l'app utile. Il giudizio su che cosa manca, e che cosa va deciso prima di costruirlo, sta più sotto, in «Per diventare utile».
+### Tubo, 18 ottobre 2026
 
-### Posta del motore
+Giornale degli scarti. CSV e webhook che proseguono dopo una riga errata. CSV con punto e virgola, file spostato in `elaborati/` anche se qualche riga fallisce. Cursore in ingresso se si indica la colonna. Pagine in uscita. Cursore HTTP che avanza solo dopo l'invio riuscito. Un padre per integrazione. Lookup che può fallire, restare vuoto o creare il padre. Sul duplicato si scarta o si adotta. Trasformazioni, mappa valori, telefono `+39`. Prova a secco, modifica, pausa. Credenziali sull'uscita HTTP. Scarico e ricarico della configurazione. Chiave tenuta nel motore per le schede che Espo non lascia personalizzare (team, cartelle, categorie, ruoli, modelli email).
 
-Nesso avrà un proprio SMTP, e una casella IMAP. Serve al motore, non sostituisce la posta in uscita di Espo: quella resta in Espo, perché è Espo a mandare le email del CRM.
+### Prodotto e demo, 18 ottobre 2026
 
-Usi già chiari:
+Schermata Schede: elenco, integrazioni che la toccano, scheda nuova, campo nuovo con tipo vero e obbligo. Il campo viene appeso al dettaglio e all'elenco.
 
-- Avvisare quando un giro fallisce o quando una riga viene scartata, a un indirizzo configurato.
-- Mandare il riepilogo di una giornata: create, aggiornate, invariate, scartate.
-- Canale in uscita: un record che esce da Espo diventa un messaggio verso un destinatario indicato nell'abbinamento.
-- Canale in ingresso: una casella riceve messaggi e ogni messaggio diventa un record, come già fa il webhook con un POST.
-- Il testo del messaggio si compone dai campi abbinati. Mittente, risposta e oggetto sono configurabili per integrazione.
+Demo Gruppo Meridia caricata: anagrafiche, offerte in euro, contratti, commesse, fatture, ticket, visite, ruoli (Direzione compresa), team, utenti, cartelle, otto PDF collegati ad azienda e offerta, compiti, chiamate, articoli, lista fiera, campagna, modelli email. Chiara Fabbri legge i clienti del Nord-Est e non quelli della Lombardia. La home di direzione resta leggibile. Il capitolo «Stato della prova» è la fotografia del primo seme, non questo demo.
 
-Da prevedere insieme: credenziali separate da quelle di Espo, prova di invio dalla schermata, e il fatto che un messaggio non inviato resti in coda e venga ritentato.
+## Fuori dal prodotto
 
-### Schede e campi
+Non si costruiscono. Sono il confine.
 
-- Una schermata Entità, fuori dal percorso dell'integrazione: creare, rivedere e aggiungere campi senza dover rifare i quattro passi.
-- Tipi oltre il testo: numero, data, data e ora, sì/no, elenco, valuta, email, telefono, url.
-- Data da un formato all'altro. La mappa dei valori di un elenco c'è già nel passo di abbinamento.
-- Più lookup verso la stessa scheda, con un nome scelto da chi configura. Il collegamento di più record e l'attività appesa a una scheda ci sono già nel passo di abbinamento.
-- Campi obbligatori di Espo dichiarati prima del salvataggio, così il giro non fallisce a metà.
-- Modificare una scheda già creata: aggiungere un campo, cambiare un'etichetta.
+- La posta del CRM resta in Espo. Nesso non la manda.
+- Report e processi dell'Advanced Pack non si riscrivono e non si pubblicano. Il pacchetto resta in `local/advanced-pack/`, fuori da git. Nesso consegna record che quelli sanno leggere.
+- Il demo è la prova, non un secondo prodotto. Non si inventano schede per far vedere movimento.
+- Nesso ha sempre Espo da un lato. Non è un ponte fra due sistemi qualunque.
+- Niente SQL sulle tabelle di Espo. Niente dump di produzione.
+- Gli utenti di Espo non nascono da un'anagrafica. Un giro persone, se servirà, sta spento finché non lo si accende.
+- Chiudere un record sparito dalla sorgente lo lascia nello storico. Il diritto all'oblio è un altro gesto, e non è questa chiusura.
+- I quattro flussi del backup (sito, file notturni, anagrafiche, commesse) non diventano codice. Diventano configurazioni quando i canali esistono. Il piano resta nel backup, fuori da questo repo.
+
+## Decisioni chiuse
+
+Il codice aperto le rispetta.
+
+- Nesso governa le schede.
+- La visibilità è una regola: «questa riga è del team Vendite, assegnata a questa persona».
+- Se il record sparisce dalla sorgente, su Espo si chiude e resta nello storico.
+- Di default vince la sorgente, anche se la cella arriva vuota. Il campo può avere un altro padrone: lo dice la voce aperta «Padrone del campo».
+- La scrittura di ritorno verso il gestionale resta spenta finché non la si sceglie.
+
+## Aperte
+
+Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. Le funzioni pensate per convincere un'azienda, distinte da questo elenco tecnico, stanno in [Adozione](15-adozione.md).
+
+### Prima di un carico vero
+
+Sono uscite il 18 ottobre sera, ragionando su che cosa un'azienda accetterebbe di accendere.
+
+- Padrone del campo. Di default la sorgente. Si può dire che un campo lo tiene Espo, così la nota del commerciale non sparisce al giro dopo. Lo svuotamento vale solo sui campi della sorgente.
+- Anteprima del giro intero, prima di scrivere: quante righe creerebbe, aggiornerebbe, chiuderebbe.
+- La prima chiusura si conferma. Non parte da sola.
+- Un interruttore ferma ogni scrittura verso Espo.
+- Pagine in ingresso. Il tetto di 500 righe sul database non regge un'anagrafica vera. Senza colonna di variazione oggi rilegge fino a quel tetto.
+- Orario fisso, per esempio le 02:10. Oggi la cadenza è solo manuale, 5, 15 o 60 minuti.
+- Se al file manca una colonna obbligatoria, si ferma il file. Non si scartano le righe una a una.
+- Qualità prima di Espo: partita IVA, data in più formati (`18/10/2026` e `2026-10-18`), valore di elenco che non esiste fra le opzioni.
+- In abbinamento, tre righe vere della sorgente accanto al campo Espo.
+- Riepilogo del giro in pagina: create, aggiornate, chiuse, scartate. Oggi c'è l'ultima frase, tagliata a 500 caratteri, e il giornale dei giri.
+
+### Dati e visibilità
+
+- Regola «visibile a questo team» e «assegnata a questa persona». Oggi sono un lookup.
+- Chiudere il record sparito dalla sorgente, secondo la decisione sopra. Oggi non succede nulla.
+- Chiave di più colonne. Oggi dalla pagina è una sola.
+- Più padri: «prima le aziende e le sedi, poi la rubrica». Oggi se ne indica uno solo.
+- Coda di ritento con attesa crescente, per l'uscita muta e per la riga il cui padre non è ancora arrivato.
+- In uscita il collegamento parte come chiave esterna, non come id Espo.
+- Cambiare l'etichetta di un campo già creato.
+- Più collegamenti verso la stessa scheda, con il nome scelto. Se ne esiste uno, Nesso lo riusa. Se ne esistono due, si blocca o ne crea un altro senza chiedere il nome.
+- Layout: dettaglio, elenco, kanban. Oggi il campo nuovo viene appeso in fondo.
+- Obbligatori controllati prima del giro, con il messaggio sul campo.
+- Valuta e fuso in lettura. Il telefono italiano è già `+39`. Le offerte della prova sono già in euro.
+- Attività nata insieme al record: compito, chiamata, riunione, con data e assegnatario.
+- Nota nello storico, così si vede da dove è arrivata la riga.
+- Portale: un contatto che entra da fuori ha un percorso.
+
+### Uso
+
+- Login, e due gesti: chi cambia l'integrazione, chi la lancia e legge l'esito.
+- Nesso parla con Espo con un utente suo, non con l'admin.
+- Prossimo giro, ultimo successo, ultimo errore, da quanto tace.
+- Avviso quando un giro fallisce o tace troppo. Il canale previsto è la posta del motore, sotto.
+- Ripetere una sola riga scartata, senza rilanciare tutto il file.
+- Errore col nome del campo.
+- Prova a secco del webhook: incollare un esempio. Oggi risponde che non ha righe.
+- Due ambienti, prova e esercizio, e il passaggio della configurazione con le password messe a mano.
+- Storia della regola: chi ha cambiato l'abbinamento, e tornare alla versione di prima.
+- Segreti fuori dal SQLite in chiaro.
+- Più esecuzioni insieme, o almeno una per canale. Dopo un errore il pianificatore aspetta ancora l'intervallo intero.
+- Test automatici sui quattro canali, sulla scheda nuova e sul lookup.
 
 ### Canali
 
-- SFTP e FTPS, in lettura e in deposito.
-- Postgres, SQL Server e Oracle, sempre con il vincolo di una sola lettura finché non esiste una politica di scrittura.
-- Scrittura di ritorno sul sistema di origine, esplicita e disattivata se non si sceglie.
-- HTTP in ingresso firmato, e OAuth in uscita. L'uscita ha già Bearer, utente e password, e un'intestazione con nome e valore. Il webhook ha ancora solo il token nell'indirizzo.
-- Coda: se il sistema esterno non risponde, il record resta e viene ritentato.
-- Allegati e file collegati al record.
+- SFTP e FTPS, in lettura e in deposito. Excel, non solo CSV.
+- Postgres, SQL Server, Oracle. TLS e tunnel, anche su MySQL.
+- HTTP firmato in ingresso. OAuth in uscita.
+- Scrittura di ritorno sulla sorgente, spenta finché non si accende.
+- Il documento come canale, con cartella e visibilità. Il percorso di un file locale si può già caricare su un campo file.
+- La casella locale consegna il JSON a un'altra integrazione. Oggi lo accumula e si ferma.
+- Posta del motore, SMTP e IMAP, separata da quella di Espo: avviso, riepilogo della giornata, messaggio in uscita composto dai campi, messaggio in ingresso che diventa un record. Credenziali proprie, prova di invio, coda se l'invio fallisce.
 
-### Regole di passaggio
+### In che ordine
 
-- Cancellazione: se il record sparisce dal sistema esterno, decidere se chiuderlo su Espo o lasciarlo. Sul duplicato, scartare o aggiornare il record già presente, è già una scelta dell'integrazione.
-
-### Affidabilità e accesso
-
-- Login di Nesso, ruoli, e un utente delle API diverso dall'admin di Espo.
-- Segreti fuori dal SQLite in chiaro.
-- Ripetizione del giro con backoff. Lo scarto di una riga non blocca più le altre, ed è visibile in Attività. Il pianificatore, dopo un errore, aspetta ancora l'intervallo intero.
-- Test automatici sui quattro canali, sulla creazione scheda e sul lookup.
-- Pubblicare l'Advanced Pack. Sulla prova locale il compose lo monta già da `local/advanced-pack/`, fuori da git. L'immagine pubblica non lo contiene. I dati di produzione restano fuori.
-
-## Ancora aperto, dopo il 18 ottobre 2026
-
-Il motore ora tiene il giornale della riga, non si ferma alla prima, pagina l'uscita e sposta il cursore solo dopo un invio riuscito. Restano questi buchi.
-
-- Il database in ingresso diventa incrementale solo se si indica la colonna di variazione. Senza, rilegge fino a 500 righe. Il CSV non ha un cursore: a ogni giro legge i file presenti, poi li sposta.
-- Ogni valore letto dal database è ancora una stringa. Una cella vuota non svuota il campo già pieno su Espo.
-- La chiave dalla pagina è ancora una colonna sola. Un record sparito dalla sorgente resta su Espo.
-- Il webhook è solo JSON, con il token nell'indirizzo. Non c'è firma del corpo. «Esegui ora» non manda un esempio.
-- Il database esterno è solo MySQL o MariaDB, senza TLS né tunnel.
-- La casella locale accumula il JSON e non lo consegna a un'altra integrazione.
-- Una sola esecuzione alla volta. Due contenitori non si coordinano. Dopo un errore il pianificatore aspetta l'intervallo intero. Non c'è un avviso.
-- I campi creati da Nesso sono testo. Numero, data, elenco e valuta si abbinano se la scheda li ha già.
-- L'utente assegnato e i team non hanno una regola propria: si collegano come un lookup.
-- L'uscita manda l'id Espo del collegamento, salvo che la mappa includa la chiave esterna.
-- Posta, login, SFTP, altri database, OAuth e la politica di cancellazione restano nell'elenco sopra.
-
-## Per diventare utile
-
-Nesso oggi sposta una colonna in un campo. Una persona che apre Espo non ci vede la propria azienda, e una persona che apre Nesso non ci governa il CRM. Qui c'è quello che va valutato e poi costruito, oltre al tubo. Le voci già scritte sopra non si ripetono: si dice solo dove entrano.
-
-### Decisioni chiuse
-
-Sono le scelte di prodotto. Il codice che viene dopo le rispetta.
-
-- Nesso governa le schede. Ha una schermata propria: si vede che cosa c'è in Espo, si crea una scheda, si aggiunge un campo con il tipo vero, l'etichetta e l'obbligo. I quattro passi dell'integrazione restano per il passaggio dei dati.
-- La visibilità è una regola dell'integrazione: «questa riga è del team Vendite, assegnata a questa persona». Ancora da costruire. Oggi team e utente si collegano come un lookup.
-- Se il record sparisce dalla sorgente, su Espo si chiude e resta nello storico. Ancora da costruire. Oggi non succede nulla.
-- Se la sorgente e Espo hanno cambiato lo stesso campo, vince la sorgente, anche quando la cella arriva vuota. Ancora da costruire. Oggi vince chi scrive per ultimo e il vuoto viene ignorato.
-- La posta del CRM resta in Espo. Nesso non la sostituisce. La posta di Nesso, se si fa, serve agli avvisi e a un canale in più.
-- Report e processi dell'Advanced Pack non si riscrivono in Nesso. Nesso consegna un record che quelli sanno leggere. Il pacchetto resta fuori da git.
-- Il demo è la prova che l'app serve, non un secondo prodotto. Non si inventano schede per far vedere movimento.
-
-### Vedere l'azienda dentro Espo
-
-- La schermata Schede c'è: elenco, integrazioni che la toccano, scheda nuova, campo nuovo con tipo vero (testo, testo lungo, numeri, data, data e ora, sì/no, elenco, valuta, email, telefono, indirizzo web) e obbligo. Manca cambiare l'etichetta di un campo già creato.
-- Più collegamenti verso la stessa scheda, con il nome scelto da chi configura. Se ne esiste uno solo, Nesso lo riusa. Se ne esistono due, si blocca o ne crea un altro senza chiedere il nome.
-- Layout: quali campi stanno in dettaglio, in elenco, in scheda kanban. Oggi un campo nuovo viene solo appeso in fondo.
-- Obbligatori dichiarati prima del giro, con il messaggio sul campo, non a metà esecuzione.
-- Chiave fatta di più colonne. Oggi dalla pagina è una sola. Il formato già salvato non si riscrive se la colonna non cambia, e questo va tenuto.
-- Valuta e fuso. Le offerte della prova sono in euro. Una data «18/10/2026» e una «2026-10-18 10:00» non hanno ancora una regola di lettura. Il telefono italiano viene già messo in forma internazionale.
-
-### Farla usare senza leggere il codice
-
-- Login, e due gesti diversi: chi può cambiare un'integrazione, chi può solo lanciarla e leggere l'esito.
-- Nesso parla con Espo con un utente suo, non con l'admin.
-- Prossimo giro, ultimo successo, ultimo errore, da quanto tace. Oggi c'è l'ultima frase, tagliata a 500 caratteri, e il giornale dei giri.
-- Avviso quando un giro fallisce o quando non parte da troppo tempo. La posta di Nesso, sopra, è il canale previsto.
-- Ripetere una sola riga scartata, dopo la correzione, senza rilanciare tutto il file. Lo scarto c'è. Il tasto no.
-- Errore detto col nome del campo. «Telefono non valido» e non il corpo HTTP di Espo.
-- Prova a secco sul webhook: incollare un esempio. Oggi il webhook risponde che non ha righe.
-- Due ambienti, prova e esercizio, e il passaggio della configurazione dall'uno all'altro con le password messe a mano. Lo scarico c'è. Gli ambienti no.
-- Storia della regola: chi ha cambiato l'abbinamento, e tornare alla versione di prima.
-
-### Tenere i dati veri
-
-- Svuotare un campo quando la cella arriva vuota. Oggi il vuoto viene ignorato e il valore vecchio resta. Va legato alla decisione sul conflitto.
-- Cancellare o chiudere, secondo la decisione sopra. Oggi sparire dalla sorgente non fa nulla.
-- Ordine vero fra integrazioni. Oggi se ne indica una sola, «prima esegui questa». Una rubrica che dipende da aziende e da sedi non si può dire.
-- Coda di ritento con attesa crescente, per l'uscita che non risponde e per la riga il cui padre non è ancora arrivato. Il lookup può già restare vuoto o creare il padre. Non riprova da solo più tardi.
-- Più esecuzioni insieme, o almeno una per canale. Oggi la seconda riceve «un'esecuzione è già in corso». Due contenitori non si parlano.
-- Il pianificatore, dopo un errore, non aspetta sempre lo stesso intervallo.
-- Segreti fuori dal file SQLite in chiaro.
-- Test automatici sui quattro canali, sulla scheda nuova e sul lookup. Il ciclo da 15 minuti del pianificatore non è stato osservato.
-
-### Parlare con i sistemi che un'azienda ha davvero
-
-Il tubo ha webhook JSON, una SELECT MySQL o MariaDB, un CSV, un POST in uscita. Manca il resto, già elencato nei canali e qui richiamato perché senza non è utile:
-
-- File su SFTP e FTPS, in lettura e in deposito. Excel, non solo CSV.
-- Postgres, SQL Server, Oracle. TLS e tunnel sul database, anche su MySQL.
-- HTTP firmato in ingresso. OAuth in uscita. Il Bearer e l'intestazione ci sono già.
-- Scrittura di ritorno sulla sorgente, spenta finché non si accende apposta.
-- Allegati: il percorso di un file locale si può già caricare su un campo file. Manca il documento come canale, con cartella e visibilità.
-- La casella locale che riceve un JSON e lo consegna a un'altra integrazione. Oggi lo accumula e si ferma.
-- Posta in ingresso e in uscita del motore, nei limiti decisi sopra.
-
-### Rispettare come Espo organizza il lavoro
-
-- Regola «assegna a questo utente» e «visibile a questo team», non un lookup scoperto per caso.
-- Portale: un contatto che deve entrare da fuori ha un percorso, non un campo dimenticato.
-- Attività nata insieme al record: compito, chiamata, riunione, con data e assegnatario. Il legame «attività appesa a una scheda» c'è. Manca il gesto «quando entra questo cliente, crea questo compito».
-- Nota nello storico, così chi apre la scheda vede da dove è arrivata.
-- In uscita, il collegamento parte come chiave del sistema esterno, non come id interno di Espo. Oggi l'id parte, salvo che la mappa includa a mano la chiave.
-- Lo stato e la fase sono valori di un elenco. La mappa c'è. Manca il controllo, prima del giro, che il valore esista davvero fra le opzioni di Espo.
-
-### Dimostrare che serve
-
-Il demo Gruppo Meridia carica anagrafiche, offerte, contratti, commesse, fatture, ticket, visite e l'organizzazione. All'avvio arrivano i ruoli Vendite, Assistenza, Amministrazione e Direzione, cinque team, cinque utenti, le cartelle, otto documenti con file, compiti, chiamate, articoli di conoscenza, la lista della fiera, la campagna e i modelli email. Chiara Fabbri, vendite Nord-Est, legge i clienti del suo team e non quelli della Lombardia. Il documento dell'offerta Brenta sta sull'azienda e sull'opportunità. Gli importi sono in euro. La home di direzione resta quella del capitolo sul demo.
-
-Il capitolo «Stato della prova» è la fotografia del primo seme. Non è questo demo.
-
-### In che ordine valutarle
-
-1. Le decisioni in cima. Senza quelle, schede, visibilità e cancellazione si costruiscono due volte.
-2. Il demo dell'organizzazione è caricato. Usarlo fa vedere che cosa l'app non sa ancora fare.
-3. La schermata Schede c'è, con i tipi veri. Resta da cambiare l'etichetta di un campo già creato, e da mettere la visibilità come regola.
-4. Visibilità e utente assegnato come regole, più la chiave esterna in uscita al posto dell'id.
-5. Conflitto, svuotamento, cancellazione, ritento della riga.
-6. Login, utente Espo dedicato, avviso, ambienti.
-7. I canali che mancano, a partire da quello che il demo non riesce a mostrare.
-
-### Quello che resta documentazione del backup
-
-I quattro flussi del backup (sito, file notturni, anagrafiche, commesse) non diventano codice dentro Nesso. Diventano configurazioni: un collegamento e un'integrazione per ciascuno, quando i canali che servono esistono. Quel piano resta nel backup, fuori da questo repo. Non è l'elenco delle funzioni mancanti di Nesso.
+1. Padrone del campo, anteprima del giro, conferma della prima chiusura, interruttore.
+2. Pagine in ingresso e orario fisso.
+3. Qualità prima di Espo, e il file che si ferma se manca una colonna.
+4. Visibilità, chiusura del record sparito, svuotamento solo sui campi della sorgente.
+5. Login, utente Espo dedicato, riepilogo, avviso.
+6. I canali, a partire da quello che il carico vero non riesce a leggere.
