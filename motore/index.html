@@ -37,6 +37,11 @@
     button.minimizer:hover, button.menu-toggle:hover { background: #ececed; border: 0; color: #5c5c5c; }
     .minimizer svg, .menu-toggle svg { width: 14px; height: 14px; }
     .content { margin-left: var(--nav-width); min-height: 100vh; }
+    body.ingresso .navbar { display: none; }
+    body.ingresso .content { margin-left: 0; }
+    #esci { display: none; width: calc(100% - 32px); margin: 6px 16px; }
+    body.dentro #esci { display: inline-flex; }
+    body.gesto-lancia [data-cambia] { display: none !important; }
     .topbar { display: none; }
     main { padding: 8px 16px 56px; }
     .page-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; margin: 0 0 6px; }
@@ -170,6 +175,7 @@
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#5589ca" d="M3 2h6.2L13 5.8V14H3V2zm6 1.2V6h2.8L9 3.2zM4.5 8h7v1.2h-7V8zm0 2.4h7V12h-7v-1.6z"/></svg>
         <span class="nav-label">EspoCRM</span>
       </a>
+      <button type="button" class="secondary" id="esci">Esci</button>
       <button type="button" class="minimizer" id="nav-min" aria-label="Riduci il menu">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M10.2 2.4 4.6 8l5.6 5.6-1.1 1.1L2.4 8l6.7-6.7 1.1 1.1z"/></svg>
       </button>
@@ -202,6 +208,8 @@
     let catalog = [];
     let espoUrl = "http://localhost:8088";
     let state = { connections: [], pipelines: [], queue: [], deliveries: [], rejects: [], runs: [] };
+    let session = null;
+    function changes() { return session && session.gesture === "cambia"; }
     let health = { espo: "in attesa", fields: "" };
     let draft = null;
     let lastPath = "";
@@ -353,12 +361,25 @@
         <div class="page-header">
           <div class="page-title"><h1>Inizio</h1>${badge}</div>
           <div class="header-buttons">
-            ${connections.length ? `<a class="btn" href="#/integrazioni/nuova/1">Nuova integrazione</a>` : `<a class="btn" href="#/collegamenti/nuovo">Nuovo collegamento</a>`}
+            ${changes() ? (connections.length ? `<a class="btn" data-cambia href="#/integrazioni/nuova/1">Nuova integrazione</a>` : `<a class="btn" data-cambia href="#/collegamenti/nuovo">Nuovo collegamento</a>`) : ""}
             <a class="btn secondary" href="${esc(espoUrl)}" target="_blank" rel="noopener">Apri Espo</a>
           </div>
         </div>
         <p class="lead">${health.espo === "raggiungibile" ? "" : esc(espoText) + " "}Prima colleghi il sistema esterno. Poi scegli quale scheda di Espo riceve o manda i dati.</p>
-        <label class="panel"><input type="checkbox" id="writes" ${state.writesEnabled === false ? "" : "checked"}> Scritture verso Espo accese. Se le togli, i giri calcolano e non scrivono.</label>
+        ${changes() ? `<label class="panel" data-cambia><input type="checkbox" id="writes" ${state.writesEnabled === false ? "" : "checked"}> Scritture verso Espo accese. Se le togli, i giri calcolano e non scrivono.</label>` : `<p class="hint">Puoi lanciare i giri e leggere l'esito.</p>`}
+        ${changes() ? `<form class="panel" id="nuovo-attore">
+          <h2>Chi entra</h2>
+          <p class="hint">Due gesti: chi cambia le integrazioni, e chi le lancia e legge l'esito.</p>
+          <label>Nome<input name="name" autocomplete="off" required></label>
+          <label>Password<input name="password" type="password" autocomplete="new-password" required></label>
+          <label>Gesto
+            <select name="gesture">
+              <option value="cambia">Cambia le integrazioni</option>
+              <option value="lancia">Lancia i giri</option>
+            </select>
+          </label>
+          <div class="actions"><button type="submit">Aggiungi un ingresso</button></div>
+        </form>` : ""}
         <section class="panel ${homeRed ? "bad" : ""}">
           <div class="page-title"><h2>Anagrafiche</h2>${morningBadge}</div>
           <strong class="dashlet-count">${morningNumber}</strong>
@@ -398,6 +419,19 @@
         say(writes.checked ? t("Le scritture sono accese.") : t("Le scritture verso Espo sono ferme."));
         await refresh();
       });
+      const actors = document.querySelector("#nuovo-attore");
+      if (actors) actors.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const response = await fetch("/api/attori", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: actors.name.value.trim(), password: actors.password.value, gesture: actors.gesture.value })
+        });
+        const data = await response.json();
+        if (!response.ok) return say(data.error || t("Non sono riuscito a salvare."));
+        actors.reset();
+        say(t("Ingresso aggiunto."));
+      });
     }
 
     function connectionCard(item) {
@@ -410,8 +444,8 @@
         <h2>${esc(item.name)}</h2>
         <dl><dt>Tipo</dt><dd>${esc(kindLabel[item.kind] || item.kind)}</dd>${detail}</dl>
         <div class="actions">
-          <a class="btn secondary" href="#/collegamenti/modifica/${esc(item.id)}">Modifica</a>
-          <button type="button" class="danger" data-del-c="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button>
+          <a class="btn secondary" data-cambia href="#/collegamenti/modifica/${esc(item.id)}">Modifica</a>
+          <button type="button" class="danger" data-cambia data-del-c="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button>
         </div>
       </article>`;
     }
@@ -421,7 +455,7 @@
       shell("Collegamenti", `
         <div class="page-header">
           <h1>Collegamenti</h1>
-          <div class="header-buttons"><a class="btn" href="#/collegamenti/nuovo">Nuovo collegamento</a></div>
+          <div class="header-buttons"><a class="btn" data-cambia href="#/collegamenti/nuovo">Nuovo collegamento</a></div>
         </div>
         <p class="lead">Un collegamento è il canale verso il sistema esterno. Non dice ancora quali campi vanno su Espo.</p>
         ${items.map(connectionCard).join("") || `<p class="panel">Nessun collegamento. Il primo passo è crearne uno.</p>`}
@@ -484,7 +518,7 @@
           </div>
           <p id="form-error" class="error" role="alert"></p>
           <div class="actions">
-            <button type="submit">Salva collegamento</button>
+            <button type="submit" data-cambia>Salva collegamento</button>
             <a class="btn secondary" href="#/collegamenti">Annulla</a>
           </div>
         </form>
@@ -562,7 +596,7 @@
           <label>Secondo gradino <select id="piano-2">${pipelineOptions(chosen[1])}</select></label>
           <label>Terzo gradino <select id="piano-3">${pipelineOptions(chosen[2])}</select></label>
         </div>
-        <div class="actions"><button type="button" id="salva-piano">Salva il piano</button></div>
+        <div class="actions"><button type="button" id="salva-piano" data-cambia>Salva il piano</button></div>
       </section>`;
     }
 
@@ -584,7 +618,7 @@
           <label>Motivo <input id="silenzio-motivo" placeholder="Chiusura contabile" autocomplete="off"></label>
           <label>Vale per <select id="silenzio-per">${scope}</select></label>
         </div>
-        <div class="actions"><button type="button" id="aggiungi-finestra">Aggiungi la finestra</button></div>
+        <div class="actions"><button type="button" id="aggiungi-finestra" data-cambia>Aggiungi la finestra</button></div>
       </section>`;
     }
 
@@ -642,7 +676,7 @@
           <h1>Integrazioni</h1>
           <div class="header-buttons">
             <a class="btn secondary" href="#/consegna">Pagina di consegna</a>
-            <a class="btn" href="#/integrazioni/nuova/1">Nuova integrazione</a>
+            <a class="btn" data-cambia href="#/integrazioni/nuova/1">Nuova integrazione</a>
           </div>
         </div>
         <p class="lead">Un'integrazione lega un collegamento a una scheda di Espo.</p>
@@ -673,14 +707,14 @@
             <div class="actions">
               <button type="button" data-run="${esc(item.id)}">Esegui ora</button>
               <button type="button" class="secondary" data-dry="${esc(item.id)}">Prova a secco</button>
-              <button type="button" class="secondary" data-preview="${esc(item.id)}">Anteprima del giro</button>
-              <button type="button" class="secondary" data-read="${esc(item.id)}" data-on="${item.read_only ? "1" : "0"}">${item.read_only ? "Esci dalla lettura" : "Modalità lettura"}</button>
-              <button type="button" class="secondary" data-undo="${esc(item.id)}">Annulla il giro</button>
+              <button type="button" class="secondary" data-cambia data-preview="${esc(item.id)}">Anteprima del giro</button>
+              <button type="button" class="secondary" data-cambia data-read="${esc(item.id)}" data-on="${item.read_only ? "1" : "0"}">${item.read_only ? "Esci dalla lettura" : "Modalità lettura"}</button>
+              <button type="button" class="secondary" data-cambia data-undo="${esc(item.id)}">Annulla il giro</button>
               ${item.last_status === "conferma" ? `<button type="button" data-close="${esc(item.id)}">Conferma le chiusure</button>` : ""}
-              <a class="btn secondary" href="#/integrazioni/modifica/${esc(item.id)}/1">Modifica</a>
+              <a class="btn secondary" data-cambia href="#/integrazioni/modifica/${esc(item.id)}/1">Modifica</a>
               ${item.silence_held ? `<button type="button" data-silence-ok="${esc(item.id)}">Conferma il file</button><button type="button" class="secondary" data-silence-drop="${esc(item.id)}">Scarta il file</button>` : ""}
-              <button type="button" class="secondary" data-pause="${esc(item.id)}" data-enabled="${item.enabled === 0 ? "0" : "1"}">${item.enabled === 0 ? "Riattiva" : "Metti in pausa"}</button>
-              <button type="button" class="danger" data-del-p="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button>
+              <button type="button" class="secondary" data-cambia data-pause="${esc(item.id)}" data-enabled="${item.enabled === 0 ? "0" : "1"}">${item.enabled === 0 ? "Riattiva" : "Metti in pausa"}</button>
+              <button type="button" class="danger" data-cambia data-del-p="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button>
             </div>
             <p class="hint" data-msg="${esc(item.id)}" role="status"></p>
           </article>`;
@@ -692,12 +726,12 @@
           <p class="hint">Il file non contiene le password. Su un altro ambiente vanno riscritte.</p>
           <div class="actions">
             <button type="button" id="export-config">Scarica</button>
-            <label class="btn secondary">Carica<input id="import-config" type="file" accept="application/json,.json" hidden></label>
+            <label class="btn secondary" data-cambia>Carica<input id="import-config" type="file" accept="application/json,.json" hidden></label>
           </div>
           <p class="hint">Il foglio è l'abbinamento: colonna, campo, trasformazione, padrone, obbligatorio. Il JSON resta per spostare la configurazione.</p>
           <div class="actions">
             <button type="button" class="secondary" id="export-sheet">Scarica il foglio</button>
-            <label class="btn secondary">Carica il foglio<input id="import-sheet" type="file" accept=".csv,text/csv" hidden></label>
+            <label class="btn secondary" data-cambia>Carica il foglio<input id="import-sheet" type="file" accept=".csv,text/csv" hidden></label>
           </div>
         </div>
       `);
@@ -856,7 +890,7 @@
     }
 
     function blankDraft() {
-      return { id: "", name: "", connectionId: "", entityMode: "existing", espoEntity: "", newSingular: "", newPlural: "", externalIdField: "", keyColumns: [], scheduleMinutes: "0", scheduleAt: "", expectAt: "", dependsOn: "", cursorColumn: "", enabled: true, onDuplicate: "fail", proposeFrom: "", proposeEntity: "", proposeField: "", proposeValue: "", rows: [emptyRow()], samples: null };
+      return { id: "", name: "", connectionId: "", entityMode: "existing", espoEntity: "", newSingular: "", newPlural: "", externalIdField: "", keyColumns: [], scheduleMinutes: "0", scheduleAt: "", expectAt: "", alertMinutes: "", dependsOn: "", cursorColumn: "", enabled: true, onDuplicate: "fail", proposeFrom: "", proposeEntity: "", proposeField: "", proposeValue: "", rows: [emptyRow()], samples: null };
     }
 
     function draftFromPipeline(item) {
@@ -895,6 +929,7 @@
         scheduleMinutes: String(item.schedule_minutes || 0),
         scheduleAt: item.schedule_at || "",
         expectAt: item.expect_at || "",
+        alertMinutes: item.alert_minutes || "",
         dependsOn: item.depends_on || "",
         cursorColumn: item.cursor_column || "",
         enabled: item.enabled !== 0,
@@ -926,7 +961,7 @@
           <p id="form-error" class="error" role="alert"></p>
           <div class="actions">
             ${stepNumber > 1 ? `<button type="button" class="secondary" id="back">Indietro</button>` : `<a class="btn secondary" href="#/integrazioni">Annulla</a>`}
-            <button type="submit">${stepNumber === 4 ? "Salva integrazione" : "Continua"}</button>
+            <button type="submit" ${stepNumber === 4 ? "data-cambia" : ""}>${stepNumber === 4 ? "Salva integrazione" : "Continua"}</button>
           </div>
         </form>
       `);
@@ -1025,7 +1060,7 @@
           <span class="hint">Facoltative, separate da virgola. Per un gruppo: il codice società, oltre al codice cliente. La chiave è la concatenazione. Una colonna sola resta il caso normale.</span>
         </label>
         <p id="chiave-esempio" class="hint"></p>`;
-      const tools = outbound ? "" : `<div class="actions"><button type="button" class="secondary" id="proponi">Proponi l'abbinamento</button><button type="button" class="secondary" data-ricetta="anagrafiche">Ricetta anagrafiche</button><button type="button" class="secondary" data-ricetta="contatti">Ricetta contatti</button><button type="button" class="secondary" data-ricetta="sedi">Ricetta sedi</button><button type="button" class="secondary" data-ricetta="listino">Ricetta listino</button></div><p class="hint">Non è un connettore certificato con un gestionale. È un abbinamento pronto da rivedere.</p>`;
+      const tools = outbound ? "" : `<div class="actions" data-cambia><button type="button" class="secondary" id="proponi">Proponi l'abbinamento</button><button type="button" class="secondary" data-ricetta="anagrafiche">Ricetta anagrafiche</button><button type="button" class="secondary" data-ricetta="contatti">Ricetta contatti</button><button type="button" class="secondary" data-ricetta="sedi">Ricetta sedi</button><button type="button" class="secondary" data-ricetta="listino">Ricetta listino</button></div><p class="hint">Non è un connettore certificato con un gestionale. È un abbinamento pronto da rivedere.</p>`;
       return `${identity}${tools}<div id="campione" class="hint"></div><div id="map-rows">${rows}</div><button type="button" class="secondary" id="add-row">Aggiungi un abbinamento</button>`;
     }
 
@@ -1260,6 +1295,10 @@
           <input name="expectAt" value="${esc(draft.expectAt || "")}" placeholder="07:00" autocomplete="off">
           <span class="hint">Per un file. Se a quell'ora non è stato elaborato, la home diventa rossa. Esempio 07:00.</span>
         </label>
+        <label>Avvisa se tace da più di, minuti
+          <input name="alertMinutes" value="${esc(draft.alertMinutes || "")}" inputmode="numeric" autocomplete="off">
+          <span class="hint">Se lo lasci vuoto, il silenzio non accende un avviso. Un giro fallito avvisa comunque, una volta.</span>
+        </label>
         <label>Quando
           <select name="scheduleMinutes">
             ${Object.entries(when).map(([value, label]) => `<option value="${value}" ${String(draft.scheduleMinutes) === value ? "selected" : ""}>${label}</option>`).join("")}
@@ -1395,6 +1434,7 @@
         draft.enabled = form.enabled.checked;
         draft.scheduleAt = form.scheduleAt ? form.scheduleAt.value.trim() : "";
         draft.expectAt = form.expectAt ? form.expectAt.value.trim() : "";
+        draft.alertMinutes = form.alertMinutes ? form.alertMinutes.value.trim() : "";
         if (form.proposeFrom) {
           draft.proposeFrom = form.proposeFrom.value.trim();
           draft.proposeEntity = form.proposeEntity.value.trim();
@@ -1446,6 +1486,7 @@
         scheduleMinutes: Number(draft.scheduleMinutes),
         scheduleAt: draft.scheduleAt || "",
         expectAt: draft.expectAt || "",
+        alertMinutes: draft.alertMinutes || "",
         dependsOn: draft.dependsOn,
         cursorColumn: draft.cursorColumn,
         enabled: draft.enabled !== false,
@@ -1619,7 +1660,7 @@
       shell("Schede", `
         <div class="page-header">
           <div class="page-title"><h1>Schede</h1></div>
-          <div class="header-buttons"><a class="btn" href="#/schede/nuova">Nuova scheda</a></div>
+          <div class="header-buttons"><a class="btn" data-cambia href="#/schede/nuova">Nuova scheda</a></div>
         </div>
         <p class="lead">Qui si vede che cosa c'è in Espo e quali integrazioni lo toccano. Una scheda nuova, e i suoi campi, si aggiungono da qui.</p>
         <div class="table-wrap panel">
@@ -1815,7 +1856,49 @@
       notFound();
     }
 
+    function loginPage(primo) {
+      document.body.classList.add("ingresso");
+      document.body.classList.remove("dentro", "gesto-lancia");
+      shell(primo ? "Primo ingresso" : "Entra", `
+        <div class="page-header"><h1>${primo ? "Primo ingresso" : "Entra"}</h1></div>
+        <p class="lead">${primo ? "Il primo ingresso cambia le integrazioni. Poi puoi aggiungere chi lancia i giri." : "Chi cambia le integrazioni, oppure chi le lancia e legge l'esito."}</p>
+        <form class="panel" id="ingresso">
+          <label>Nome<input name="name" autocomplete="username" required></label>
+          <label>Password<input name="password" type="password" autocomplete="${primo ? "new-password" : "current-password"}" required></label>
+          <p class="error" id="ingresso-errore"></p>
+          <div class="actions"><button type="submit">${primo ? "Crea l'ingresso" : "Entra"}</button></div>
+        </form>
+      `);
+      document.querySelector("#ingresso").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const response = await fetch(primo ? "/api/ingresso/primo" : "/api/ingresso", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: form.name.value.trim(), password: form.password.value })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          document.querySelector("#ingresso-errore").textContent = data.error || t("Ingresso non riuscito.");
+          return;
+        }
+        session = data;
+        await refresh();
+      });
+    }
+
     async function refresh() {
+      const who = await fetch("/api/sessione");
+      if (who.status === 401) {
+        session = null;
+        const denied = await who.json().catch(() => ({}));
+        loginPage(Boolean(denied.primo));
+        return;
+      }
+      session = await who.json();
+      document.body.classList.remove("ingresso");
+      document.body.classList.add("dentro");
+      document.body.classList.toggle("gesto-lancia", session.gesture !== "cambia");
       const [stateResponse, healthResponse] = await Promise.all([fetch("/api/state"), fetch("/api/health")]);
       state = await stateResponse.json();
       health = await healthResponse.json();
@@ -1830,6 +1913,11 @@
       render();
     }
 
+    document.querySelector("#esci").addEventListener("click", async () => {
+      await fetch("/api/uscita", { method: "POST" });
+      session = null;
+      await refresh();
+    });
     window.addEventListener("hashchange", () => {
       const here = pathOf();
       if (!here.startsWith("/integrazioni/nuova") && !here.startsWith("/integrazioni/modifica")) draft = null;

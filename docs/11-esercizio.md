@@ -14,7 +14,7 @@ La prima volta scarica `mariadb:11.4`, `espocrm/espocrm:10.0` e costruisce il mo
 |---|---|
 | http://localhost:8088 | pagina di login Espo, italiano |
 | `admin` / `locale-admin` | entra |
-| http://localhost:8091 | pagina Inizio |
+| http://localhost:8091 | primo ingresso, poi la pagina Inizio |
 | http://localhost:8091/api/health | `espo` raggiungibile, `fields` pronti |
 
 `docker compose ps` deve mostrare `nessocrm-db`, `nessocrm-espo`, `nessocrm-daemon`, `nessocrm-motore`.

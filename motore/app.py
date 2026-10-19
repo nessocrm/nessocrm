@@ -159,6 +159,7 @@ def init_db() -> None:
             "propose_entity": "TEXT",
             "propose_field": "TEXT",
             "propose_value": "TEXT",
+            "alert_minutes": "INTEGER",
         }
         for name, ddl in additions.items():
             if name not in columns:
@@ -224,6 +225,25 @@ def init_db() -> None:
                 external_key TEXT NOT NULL,
                 PRIMARY KEY (pipeline_id, external_key)
             );
+            CREATE TABLE IF NOT EXISTS actor (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                gesture TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS session (
+                token TEXT PRIMARY KEY,
+                actor_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS notice (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                open INTEGER NOT NULL DEFAULT 1
+            );
             CREATE TABLE IF NOT EXISTS stage_proposal (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 pipeline_id TEXT NOT NULL,
@@ -240,11 +260,19 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO setting (key, value) VALUES ('writes', '1')")
 
 
-def espo_request(method: str, path: str, body: dict | None = None, query: dict | None = None):
+def espo_call(
+    method: str,
+    path: str,
+    body: dict | None = None,
+    query: dict | None = None,
+    *,
+    user: str,
+    password: str,
+):
     url = ESPO_BASE + path
     if query:
         url += "?" + urllib.parse.urlencode(query, doseq=True)
-    token = __import__("base64").b64encode(f"{ESPO_USER}:{ESPO_PASSWORD}".encode()).decode()
+    token = base64.b64encode(f"{user}:{password}".encode()).decode()
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Espo-Authorization", token)
@@ -263,6 +291,52 @@ def espo_request(method: str, path: str, body: dict | None = None, query: dict |
         except json.JSONDecodeError:
             parsed = {"message": raw or error.reason}
         return error.code, parsed
+
+
+def _admin_path(path: str) -> bool:
+    markers = ("/Metadata", "/Admin/", "/I18n/", "/EntityManager/", "/layout/", "/api/v1/App/", "/api/v1/User", "/api/v1/Role")
+    return any(marker in path for marker in markers)
+
+
+def _record_entity(path: str) -> str:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 3 and parts[0] == "api" and parts[1] == "v1":
+        return parts[2]
+    return ""
+
+
+def espo_admin(method: str, path: str, body: dict | None = None, query: dict | None = None):
+    return espo_call(method, path, body, query, user=ESPO_USER, password=ESPO_PASSWORD)
+
+
+def data_credentials() -> tuple[str, str]:
+    user = setting_value("espo_service_user", "")
+    secret = setting_value("espo_service_secret", "")
+    if user and secret:
+        return user, secret
+    return ESPO_USER, ESPO_PASSWORD
+
+
+def assert_in_role(entity: str) -> None:
+    raw = setting_value("espo_role_entities", "")
+    if not raw or not entity:
+        return
+    try:
+        granted = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    if isinstance(granted, list) and entity not in granted:
+        raise RuntimeError(f"la scheda {entity} non è nel ruolo di Nesso")
+
+
+def espo_request(method: str, path: str, body: dict | None = None, query: dict | None = None):
+    if _admin_path(path):
+        return espo_admin(method, path, body, query)
+    entity = _record_entity(path)
+    if entity:
+        assert_in_role(entity)
+    user, password = data_credentials()
+    return espo_call(method, path, body, query, user=user, password=password)
 
 
 def resolve_import_file(name: str) -> Path:
@@ -571,6 +645,10 @@ def prepare_espo() -> None:
         STATE["detail"] = str(error)
         print("[motore] preparazione", error)
         return
+    try:
+        ensure_service_user()
+    except Exception as error:
+        print("[motore] utente Espo", error)
     try:
         from demo_meridia import seed_demo
         seed_demo(connect, save_connection, save_pipeline, run_pipeline, ingest, SCAMBIO, espo_request)
@@ -1381,6 +1459,63 @@ def notice_absent(now: datetime | None = None) -> list[str]:
     return noted
 
 
+def deliver_notice(notice: dict) -> None:
+    """Punto unico per la posta del motore. Oggi non invia, e non usa la posta di Espo."""
+    return None
+
+
+def open_notice(pipeline_id: str, kind: str, minutes: int = 0) -> bool:
+    with connect() as conn:
+        already = conn.execute(
+            "SELECT 1 FROM notice WHERE pipeline_id = ? AND kind = ? AND open = 1",
+            (pipeline_id, kind),
+        ).fetchone()
+        if already is not None:
+            return False
+        conn.execute(
+            "INSERT INTO notice (pipeline_id, kind, detail, created_at, open) VALUES (?, ?, ?, ?, 1)",
+            (pipeline_id, kind, str(minutes or ""), time.strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        name_row = conn.execute("SELECT name FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+        name = name_row["name"] if name_row else pipeline_id
+    deliver_notice({
+        "pipelineId": pipeline_id,
+        "kind": kind,
+        "name": name,
+        "minutes": minutes,
+    })
+    return True
+
+
+def close_notices(pipeline_id: str, kind: str | None = None) -> None:
+    with connect() as conn:
+        if kind:
+            conn.execute(
+                "UPDATE notice SET open = 0 WHERE pipeline_id = ? AND kind = ? AND open = 1",
+                (pipeline_id, kind),
+            )
+        else:
+            conn.execute("UPDATE notice SET open = 0 WHERE pipeline_id = ? AND open = 1", (pipeline_id,))
+
+
+def notice_quiet(now: datetime | None = None) -> list[str]:
+    moment = now or datetime.now()
+    noted: list[str] = []
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, last_success, alert_minutes FROM pipeline
+            WHERE COALESCE(enabled, 1) = 1 AND alert_minutes IS NOT NULL AND alert_minutes > 0
+            """
+        ).fetchall()
+    for row in rows:
+        if not carico.silence_elapsed(row["last_success"], int(row["alert_minutes"]), moment):
+            continue
+        if open_notice(row["id"], "silenzio", int(row["alert_minutes"])):
+            noted.append(row["id"])
+    return noted
+
+
 def scan_person_badges() -> None:
     with connect() as conn:
         entities = [
@@ -1407,8 +1542,17 @@ def scan_person_badges() -> None:
                 set_setting(f"badge_scan_{entity}", last[:19])
 
 
+def engine_names_default() -> set[str]:
+    names = {"admin", "Admin", "Nesso", "nesso", "Nesso Servizio"}
+    for key in ("espo_service_user", "espo_service_label"):
+        value = setting_value(key, "")
+        if value:
+            names.add(value)
+    return names
+
+
 def apply_person_badges(entity: str, records: list[dict], engine_names: set[str] | None = None) -> int:
-    names = engine_names or {"admin", "Admin"}
+    names = engine_names if engine_names is not None else engine_names_default()
     field = publish_field_name(entity, "nessoBadge")
     changed = 0
     for record in records:
@@ -1468,6 +1612,7 @@ def registry_morning(pipelines: list[dict], now: datetime | None = None) -> dict
 
 def snapshot() -> dict:
     notice_absent()
+    notice_quiet()
     with connect() as conn:
         pipelines = [dict(row) for row in conn.execute("SELECT * FROM pipeline ORDER BY direction, id")]
         for item in pipelines:
@@ -1493,6 +1638,15 @@ def snapshot() -> dict:
         silence = [dict(row) for row in conn.execute("SELECT * FROM silence_window ORDER BY start_on, id")]
         plan = [dict(row) for row in conn.execute("SELECT * FROM plan_step ORDER BY position")]
         proposals = [dict(row) for row in conn.execute("SELECT * FROM stage_proposal ORDER BY id DESC LIMIT 30")]
+        notices = [dict(row) for row in conn.execute(
+            """
+            SELECT notice.kind, notice.detail, notice.pipeline_id, pipeline.name
+            FROM notice
+            LEFT JOIN pipeline ON pipeline.id = notice.pipeline_id
+            WHERE notice.open = 1
+            ORDER BY notice.id
+            """
+        )]
     kinds = {item["id"]: item["kind"] for item in connections}
     for item in pipelines:
         if item.get("direction") == "in" and kinds.get(item.get("connection_id")) == "csv":
@@ -1522,6 +1676,21 @@ def snapshot() -> dict:
                 "text": f"{item['name']}: {balance.get('text')}",
                 "textKey": "{nome}: {testo}",
                 "textParams": {"nome": item["name"], "testo": balance.get("text")},
+            })
+    for item in notices:
+        name = item.get("name") or item.get("pipeline_id")
+        if item.get("kind") == "silenzio":
+            minutes = item.get("detail") or ""
+            alerts.append({
+                "text": f"{name}: tace da più di {minutes} minuti.",
+                "textKey": "{nome}: tace da più di {minuti} minuti.",
+                "textParams": {"nome": name, "minuti": minutes},
+            })
+        else:
+            alerts.append({
+                "text": f"{name}: il giro non è riuscito.",
+                "textKey": "{nome}: il giro non è riuscito.",
+                "textParams": {"nome": name},
             })
     return {
         "state": STATE,
@@ -2075,6 +2244,14 @@ def save_pipeline(body: dict) -> dict:
                     pipeline_id,
                 ),
             )
+        if "alertMinutes" in body:
+            raw = str(body.get("alertMinutes") or "").strip()
+            minutes = int(raw) if raw.isdigit() and int(raw) > 0 else None
+            conn.execute("UPDATE pipeline SET alert_minutes = ? WHERE id = ?", (minutes, pipeline_id))
+    try:
+        sync_service_role()
+    except Exception as error:
+        print("[motore] ruolo Nesso", error)
     return {"id": pipeline_id, "name": name, "direction": direction, "espoEntity": entity}
 
 
@@ -2093,6 +2270,7 @@ def delete_pipeline(pipeline_id: str) -> dict:
         conn.execute("DELETE FROM presenza WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM pending_close WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM stage_proposal WHERE pipeline_id = ?", (pipeline_id,))
+        conn.execute("DELETE FROM notice WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM pipeline WHERE id = ?", (pipeline_id,))
     return {"deleted": pipeline_id}
 
@@ -2173,6 +2351,10 @@ def mark_run(pipeline_id: str, status: str, detail: str, counts: dict | None = N
             "INSERT INTO run_log (pipeline_id, status, detail, created_at) VALUES (?, ?, ?, ?)",
             (pipeline_id, status, text, now),
         )
+    if status == "errore":
+        open_notice(pipeline_id, "fallito")
+    elif status == "ok":
+        close_notices(pipeline_id, None if productive else "fallito")
 
 
 def remember_reject(pipeline_id: str, external_id: str, payload, detail: str) -> None:
@@ -3541,6 +3723,10 @@ def set_enabled(pipeline_id: str, enabled: bool) -> dict:
             raise RuntimeError(blocked)
     with connect() as conn:
         conn.execute("UPDATE pipeline SET enabled = ? WHERE id = ?", (1 if enabled else 0, pipeline_id))
+    try:
+        sync_service_role()
+    except Exception as error:
+        print("[motore] ruolo Nesso", error)
     return {"id": pipeline_id, "enabled": bool(enabled)}
 
 
@@ -3673,6 +3859,195 @@ def import_config(body: dict) -> dict:
     return {"connections": saved_connections, "pipelines": saved_pipelines}
 
 
+def pipeline_scope_rows() -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM pipeline").fetchall()
+        kinds = {row["id"]: row["kind"] for row in conn.execute("SELECT id, kind FROM connection")}
+    items = []
+    for row in rows:
+        try:
+            mapping = json.loads(row["mapping_json"] or "[]")
+        except json.JSONDecodeError:
+            mapping = []
+        items.append({
+            "enabled": row["enabled"],
+            "espo_entity": row["espo_entity"],
+            "mapping": mapping,
+            "kind": kinds.get(row["connection_id"] or ""),
+        })
+    return items
+
+
+def app_user_name(info) -> str:
+    if not isinstance(info, dict):
+        return ""
+    if info.get("userName"):
+        return str(info["userName"])
+    user = info.get("user")
+    if isinstance(user, dict) and user.get("userName"):
+        return str(user["userName"])
+    return ""
+
+
+def espo_find(entity: str, attribute: str, value: str) -> str:
+    code, result = espo_admin("GET", f"/api/v1/{entity}", query={"select": "id,userName,name", "maxSize": "200"})
+    if code != 200 or not isinstance(result, dict):
+        return ""
+    for row in result.get("list") or []:
+        if str(row.get(attribute) or "") == value:
+            return str(row.get("id") or "")
+    return ""
+
+
+def sync_service_role() -> None:
+    if not setting_value("espo_service_user", "") or not setting_value("espo_role_id", ""):
+        return
+    role_id = setting_value("espo_role_id", "")
+    entities = carico.role_scope(pipeline_scope_rows())
+    code, result = espo_admin(
+        "PUT",
+        f"/api/v1/Role/{role_id}",
+        {"data": carico.role_data(entities), "assignmentPermission": "all"},
+    )
+    if code not in (200, 201):
+        raise RuntimeError(f"ruolo Nesso HTTP {code}: {result}")
+    set_setting("espo_role_entities", json.dumps(entities, ensure_ascii=False))
+
+
+def ensure_service_user() -> None:
+    """Crea, via API, l'utente con cui i giri scrivono. La password resta nei segreti locali."""
+    user = setting_value("espo_service_user", "")
+    secret = setting_value("espo_service_secret", "")
+    if user and secret:
+        code, info = espo_call("GET", "/api/v1/App/user", user=user, password=secret)
+        if code == 200 and app_user_name(info) == user:
+            sync_service_role()
+            return
+    secret = secret or secrets.token_urlsafe(24)
+    role_id = setting_value("espo_role_id", "") or espo_find("Role", "name", "Nesso")
+    if not role_id:
+        code, result = espo_admin(
+            "POST",
+            "/api/v1/Role",
+            {
+                "name": "Nesso",
+                "assignmentPermission": "no",
+                "userPermission": "no",
+                "messagePermission": "no",
+                "data": {},
+            },
+        )
+        if code not in (200, 201) or not isinstance(result, dict) or not result.get("id"):
+            raise RuntimeError(f"ruolo Nesso HTTP {code}: {result}")
+        role_id = str(result["id"])
+    user_id = espo_find("User", "userName", "nesso")
+    payload = {
+        "userName": "nesso",
+        "firstName": "Nesso",
+        "lastName": "Servizio",
+        "type": "regular",
+        "password": secret,
+        "passwordConfirm": secret,
+        "isActive": True,
+        "rolesIds": [role_id],
+    }
+    if user_id:
+        code, result = espo_admin("PUT", f"/api/v1/User/{user_id}", payload)
+    else:
+        code, result = espo_admin("POST", "/api/v1/User", payload)
+    if code not in (200, 201):
+        raise RuntimeError(f"utente Nesso HTTP {code}: {result}")
+    check, info = espo_call("GET", "/api/v1/App/user", user="nesso", password=secret)
+    if check != 200 or app_user_name(info) != "nesso":
+        raise RuntimeError(f"l'utente Nesso non entra: HTTP {check}")
+    set_setting("espo_role_id", role_id)
+    set_setting("espo_service_secret", secret)
+    set_setting("espo_service_label", "Nesso Servizio")
+    set_setting("espo_service_user", "nesso")
+    sync_service_role()
+
+
+def actor_count() -> int:
+    with connect() as conn:
+        return int(conn.execute("SELECT COUNT(*) AS n FROM actor").fetchone()["n"])
+
+
+def create_actor(name: str, password: str, gesture: str) -> dict:
+    clean = str(name or "").strip()
+    if gesture not in ("cambia", "lancia"):
+        raise RuntimeError("il gesto è cambia oppure lancia")
+    if not clean:
+        raise RuntimeError("scrivi il nome")
+    if len(str(password or "")) < 8:
+        raise RuntimeError("la password ha almeno 8 caratteri")
+    actor_id = secrets.token_hex(8)
+    try:
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO actor (id, name, password_hash, gesture) VALUES (?, ?, ?, ?)",
+                (actor_id, clean, carico.password_record(password), gesture),
+            )
+    except sqlite3.IntegrityError as error:
+        raise RuntimeError("questo nome c'è già") from error
+    return {"id": actor_id, "name": clean, "gesture": gesture}
+
+
+def open_session(actor_id: str) -> str:
+    token = secrets.token_urlsafe(32)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO session (token, actor_id, created_at) VALUES (?, ?, ?)",
+            (token, actor_id, time.strftime("%Y-%m-%d %H:%M:%S")),
+        )
+    return token
+
+
+def first_actor(body: dict) -> tuple[dict, str]:
+    if actor_count():
+        raise RuntimeError("l'ingresso c'è già")
+    if str(body.get("gesture") or "cambia") != "cambia":
+        raise RuntimeError("il primo ingresso cambia le integrazioni")
+    actor = create_actor(str(body.get("name") or ""), str(body.get("password") or ""), "cambia")
+    return actor, open_session(actor["id"])
+
+
+def login_actor(body: dict) -> tuple[dict, str]:
+    name = str(body.get("name") or "").strip()
+    password = str(body.get("password") or "")
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM actor WHERE name = ?", (name,)).fetchone()
+    if row is None or not carico.password_matches(password, row["password_hash"]):
+        raise PermissionError("ingresso non riuscito")
+    return {"name": row["name"], "gesture": row["gesture"]}, open_session(row["id"])
+
+
+def actor_from_cookie(handler: BaseHTTPRequestHandler) -> sqlite3.Row | None:
+    raw = handler.headers.get("Cookie") or ""
+    token = ""
+    for piece in raw.split(";"):
+        key, _, value = piece.strip().partition("=")
+        if key == "nesso_sessione":
+            token = value.strip()
+    if not token:
+        return None
+    with connect() as conn:
+        return conn.execute(
+            """
+            SELECT actor.id, actor.name, actor.gesture
+            FROM session JOIN actor ON actor.id = session.actor_id
+            WHERE session.token = ?
+            """,
+            (token,),
+        ).fetchone()
+
+
+def close_session(token: str) -> None:
+    if not token:
+        return
+    with connect() as conn:
+        conn.execute("DELETE FROM session WHERE token = ?", (token,))
+
+
 def scheduler() -> None:
     while True:
         time.sleep(30)
@@ -3695,6 +4070,7 @@ def scheduler() -> None:
                     print("[motore] pianificazione", row["id"], error)
             try:
                 notice_absent()
+                notice_quiet()
                 scan_person_badges()
             except Exception as error:
                 print("[motore] pianificazione", error)
@@ -3729,6 +4105,43 @@ class Handler(BaseHTTPRequestHandler):
     def send_fail(self, status: int, error) -> None:
         self.send_json(status, {"error": frasi.traduci(str(error), frasi.lingua_corrente())})
 
+    def send_entry(self, code: int, payload: dict, token: str | None = None, clear: bool = False) -> None:
+        raw = json.dumps(payload, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        if token:
+            self.send_header("Set-Cookie", f"nesso_sessione={token}; HttpOnly; SameSite=Lax; Path=/")
+        if clear:
+            self.send_header("Set-Cookie", "nesso_sessione=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def open_path(self, path: str) -> bool:
+        if path in ("/", "/api/health", "/api/frasi", "/api/sessione", "/api/ingresso", "/api/ingresso/primo"):
+            return True
+        return path.startswith("/fonts/") or path.startswith("/hook/") or path.startswith("/inbox/")
+
+    def refuse(self, path: str) -> bool:
+        if self.open_path(path):
+            return False
+        actor = actor_from_cookie(self)
+        if actor is None:
+            self.send_fail(401, "serve l'ingresso")
+            return True
+        if not carico.gesture_can(actor["gesture"], self.command, path):
+            self.send_fail(403, "questo gesto non modifica l'abbinamento")
+            return True
+        return False
+
+    def cookie_token(self) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for piece in raw.split(";"):
+            key, _, value = piece.strip().partition("=")
+            if key == "nesso_sessione":
+                return value.strip()
+        return ""
+
     def do_GET(self) -> None:
         frasi.imposta_lingua(self.headers.get("X-Nesso-Lang"))
         path = urllib.parse.urlparse(self.path).path
@@ -3752,6 +4165,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(raw)
                 return
+        if path == "/api/sessione":
+            actor = actor_from_cookie(self)
+            if actor is None:
+                self.send_json(401, {"error": frasi.traduci("serve l'ingresso", frasi.lingua_corrente()), "primo": actor_count() == 0})
+                return
+            self.send_json(200, {"name": actor["name"], "gesture": actor["gesture"]})
+            return
+        if self.refuse(path):
+            return
         try:
             if path == "/api/state":
                 self.send_json(200, snapshot())
@@ -3784,6 +4206,26 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         parts = [part for part in path.split("/") if part]
         try:
+            if path == "/api/ingresso/primo":
+                actor, token = first_actor(self.read_json())
+                self.send_entry(200, {"name": actor["name"], "gesture": actor["gesture"]}, token)
+                return
+            if path == "/api/ingresso":
+                actor, token = login_actor(self.read_json())
+                self.send_entry(200, actor, token)
+                return
+            if path == "/api/uscita":
+                close_session(self.cookie_token())
+                self.send_entry(200, {"ok": True}, clear=True)
+                return
+            if path == "/api/attori":
+                if self.refuse(path):
+                    return
+                body = self.read_json()
+                self.send_json(200, create_actor(str(body.get("name") or ""), str(body.get("password") or ""), str(body.get("gesture") or "")))
+                return
+            if not path.startswith("/hook/") and not path.startswith("/inbox/") and self.refuse(path):
+                return
             if path == "/api/connections":
                 self.send_json(200, save_connection(self.read_json()))
                 return
@@ -3933,6 +4375,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         frasi.imposta_lingua(self.headers.get("X-Nesso-Lang"))
         path = urllib.parse.urlparse(self.path).path
+        if self.refuse(path):
+            return
         try:
             if path.startswith("/api/silenzio/"):
                 self.send_json(200, delete_silence(int(path.removeprefix("/api/silenzio/"))))

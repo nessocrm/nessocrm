@@ -10,7 +10,7 @@ Base: `http://localhost:8091`. I corpi sono JSON. Gli errori di regola sono `{"e
 | percorso sconosciuto | 404 |
 | successo | 200 |
 
-Non c'è autenticazione sulle API di configurazione. Chi raggiunge la porta 8091 crea collegamenti e lancia giri. L'unico segreto è il token dentro gli URL di hook e inbox.
+Le API di configurazione chiedono l'ingresso. Il primo `POST /api/ingresso/primo` crea chi cambia le integrazioni, e solo se non c'è ancora nessuno. Poi `POST /api/ingresso` con `name` e `password` mette il cookie `nesso_sessione`. `GET /api/sessione` dice il gesto. `POST /api/uscita` toglie il cookie. `POST /api/attori` aggiunge un ingresso: il gesto è `cambia` oppure `lancia`. Chi lancia può eseguire un giro, fare la prova a secco, confermare una fase o un file in attesa, ed esportare i dati di una persona. Non salva un abbinamento: la risposta è 403 «questo gesto non modifica l'abbinamento». Senza cookie la risposta è 401 «serve l'ingresso». Webhook e casella restano sul token dell'URL. `GET /api/health` e `GET /api/frasi` restano aperti. Le password non compaiono nel giornale né in `GET /api/export`.
 
 ## GET /api/frasi
 

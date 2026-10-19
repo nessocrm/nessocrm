@@ -29,4 +29,4 @@ L'export di una persona si chiede da Attività. Non è la chiusura del record sp
 
 ## In che ordine, se l'obiettivo è l'adozione
 
-Le voci di questo capitolo sono nel motore. Il seguito tecnico sta in [Progetto](00-progetto.md): login, utente Espo dedicato, avviso.
+Le voci di questo capitolo sono nel motore. Il seguito tecnico sta in [Progetto](00-progetto.md): i canali.

@@ -14,7 +14,7 @@ The first time it downloads `mariadb:11.4`, `espocrm/espocrm:10.0` and builds th
 |---|---|
 | http://localhost:8088 | Espo login page, Italian |
 | `admin` / `locale-admin` | signs in |
-| http://localhost:8091 | Home page |
+| http://localhost:8091 | first entry, then the Home page |
 | http://localhost:8091/api/health | `espo` reachable, `fields` ready |
 
 `docker compose ps` must show `nessocrm-db`, `nessocrm-espo`, `nessocrm-daemon`, `nessocrm-motore`.

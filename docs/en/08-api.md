@@ -10,7 +10,7 @@ Base: `http://localhost:8091`. Bodies are JSON. Rule errors are `{"error": "text
 | unknown path | 404 |
 | success | 200 |
 
-There is no authentication on the configuration APIs. Whoever reaches port 8091 creates connections and starts runs. The only secret is the token inside the hook and inbox URLs.
+The configuration APIs ask for an entry. The first `POST /api/ingresso/primo` creates who changes the integrations, and only when nobody exists yet. Then `POST /api/ingresso` with `name` and `password` sets the cookie `nesso_sessione`. `GET /api/sessione` says the gesture. `POST /api/uscita` clears the cookie. `POST /api/attori` adds an entry: the gesture is `cambia` or `lancia`. Who runs can start a run, do a dry run, confirm a stage or a waiting file, and export one person's data. That person does not save a mapping: the answer is 403, "questo gesto non modifica l'abbinamento". Without a cookie the answer is 401, "serve l'ingresso". Webhook and inbox stay on the token in the URL. `GET /api/health` and `GET /api/frasi` stay open. Passwords do not appear in the journal or in `GET /api/export`.
 
 ## GET /api/frasi
 

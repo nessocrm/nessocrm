@@ -495,5 +495,41 @@ class ListinoPdfFasePrivacy(unittest.TestCase):
         self.assertEqual(carico.privacy_export(rows, "", ""), [])
 
 
+class IngressoRuoloAvviso(unittest.TestCase):
+    def test_chi_lancia_non_cambia_labbinamento(self):
+        self.assertFalse(carico.gesture_can("lancia", "POST", "/api/pipelines"))
+        self.assertFalse(carico.gesture_can("lancia", "DELETE", "/api/pipelines/clienti"))
+        self.assertTrue(carico.gesture_can("lancia", "POST", "/api/pipelines/clienti/run"))
+        self.assertTrue(carico.gesture_can("lancia", "GET", "/api/state"))
+        self.assertTrue(carico.gesture_can("cambia", "POST", "/api/pipelines"))
+        self.assertFalse(carico.gesture_can("", "GET", "/api/state"))
+
+    def test_il_ruolo_lascia_fuori_la_scheda_spenta(self):
+        entities = carico.role_scope([
+            {"enabled": 1, "espo_entity": "Account", "mapping": [{"lookupEntity": "Contact"}], "kind": "csv"},
+            {"enabled": 0, "espo_entity": "Lead", "mapping": [], "kind": "csv"},
+            {"enabled": 1, "espo_entity": "Document", "mapping": [], "kind": "pdf"},
+        ])
+        self.assertEqual(entities, ["Account", "Contact", "Document", "Attachment"])
+        data = carico.role_data(entities)
+        self.assertNotIn("Lead", data)
+        self.assertEqual(data["Account"]["edit"], "all")
+        self.assertEqual(carico.role_data(["User"])["User"]["create"], "no")
+
+    def test_lavviso_e_uno_e_il_silenzio_ha_una_soglia(self):
+        self.assertFalse(carico.notice_needed({"fallito"}, "fallito"))
+        self.assertTrue(carico.notice_needed({"fallito"}, "silenzio"))
+        moment = datetime(2026, 10, 20, 12, 0, 0)
+        self.assertFalse(carico.silence_elapsed(None, 60, moment))
+        self.assertFalse(carico.silence_elapsed("2026-10-20 11:30:00", 60, moment))
+        self.assertTrue(carico.silence_elapsed("2026-10-20 10:00:00", 60, moment))
+
+    def test_la_password_non_si_legge_dal_registro(self):
+        record = carico.password_record("segreto-lungo")
+        self.assertNotIn("segreto-lungo", record)
+        self.assertTrue(carico.password_matches("segreto-lungo", record))
+        self.assertFalse(carico.password_matches("altra-password", record))
+
+
 if __name__ == "__main__":
     unittest.main()

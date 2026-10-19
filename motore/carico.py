@@ -6,8 +6,11 @@ Il giro le applica. I test le verificano da sole.
 from __future__ import annotations
 
 import csv
+import hashlib
+import hmac
 import io
 import re
+import secrets
 from datetime import datetime, timedelta
 
 OWNERS = ("sorgente", "espo")
@@ -969,6 +972,105 @@ def compose_identity(payload: dict, columns: list[str]) -> str:
             raise RuntimeError(f"campo {name}: il valore non può contenere |")
         parts.append(value)
     return "|".join(parts)
+
+
+def password_record(password: str, salt: bytes | None = None) -> str:
+    raw = salt if salt is not None else secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), raw, 120_000)
+    return raw.hex() + "$" + digest.hex()
+
+
+def password_matches(password: str, record: str) -> bool:
+    salt_hex, _, digest_hex = str(record or "").partition("$")
+    if not salt_hex or not digest_hex:
+        return False
+    try:
+        salt = bytes.fromhex(salt_hex)
+    except ValueError:
+        return False
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120_000)
+    return hmac.compare_digest(digest.hex(), digest_hex)
+
+
+def gesture_can(gesture: str, method: str, path: str) -> bool:
+    """Chi cambia fa tutto. Chi lancia esegue e legge, e non modifica un abbinamento."""
+    if gesture == "cambia":
+        return True
+    if gesture != "lancia":
+        return False
+    verb = method.upper()
+    if verb in ("GET", "HEAD"):
+        return True
+    if verb != "POST":
+        return False
+    parts = [part for part in path.split("/") if part]
+    if parts in (["api", "uscita"], ["api", "privacy"]):
+        return True
+    if len(parts) == 3 and parts[:2] == ["api", "watch"]:
+        return True
+    if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] in ("run", "dry", "chiusure"):
+        return True
+    if len(parts) == 4 and parts[:2] == ["api", "proposte"] and parts[3] in ("conferma", "lascia"):
+        return True
+    if (
+        len(parts) == 5
+        and parts[:2] == ["api", "pipelines"]
+        and parts[3] == "silenzio"
+        and parts[4] in ("conferma", "scarta")
+    ):
+        return True
+    return False
+
+
+def role_scope(pipelines: list[dict]) -> list[str]:
+    """Schede che l'utente di servizio può leggere e scrivere: solo le integrazioni accese."""
+    found: list[str] = []
+
+    def add(name: str) -> None:
+        if name and name not in found:
+            found.append(name)
+
+    for item in pipelines:
+        enabled = item.get("enabled", 1)
+        if enabled in (0, False, "0"):
+            continue
+        add(str(item.get("espo_entity") or item.get("entity") or ""))
+        if item.get("kind") == "pdf":
+            add("Document")
+            add("Attachment")
+        for rule in item.get("mapping") or []:
+            if not isinstance(rule, dict):
+                continue
+            add(str(rule.get("lookupEntity") or ""))
+            add(str(rule.get("parentType") or ""))
+            if rule.get("role") == "visibility":
+                add("Team")
+                add("User")
+    return found
+
+
+def role_data(entities: list[str]) -> dict:
+    table = {}
+    for name in entities:
+        if name == "User":
+            table[name] = {"create": "no", "read": "all", "edit": "no", "delete": "no", "stream": "no"}
+        else:
+            table[name] = {"create": "yes", "read": "all", "edit": "all", "delete": "no", "stream": "no"}
+    return table
+
+
+def notice_needed(open_kinds: set[str], kind: str) -> bool:
+    return kind not in open_kinds
+
+
+def silence_elapsed(last_success: str | None, minutes: int, now: datetime) -> bool:
+    if minutes <= 0 or not last_success:
+        return False
+    try:
+        then = datetime.strptime(str(last_success)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return (now - then).total_seconds() >= minutes * 60
 
 
 def identity_preview(rows: list[dict], columns: list[str], limit: int = 3) -> list[str]:

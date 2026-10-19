@@ -45,7 +45,6 @@ L'istanza locale è l'immagine pubblica `espocrm/espocrm:10.0`, installata vuota
 - `/api/pull` scrive il sink e avanza il cursore, perché lì la consegna è la lettura stessa. L'invio HTTP no: il cursore si muove solo dopo i POST riusciti.
 - Gira una esecuzione alla volta. La seconda riceve «un'esecuzione è già in corso».
 - La password del database esterno è in chiaro nel file SQLite del volume locale.
-- La porta 8091 non ha login. Chi la raggiunge configura e lancia i giri.
 - Il pianificatore non è stato osservato per un ciclo intero da 15 minuti.
 - Non ci sono test automatici.
 
@@ -76,6 +75,16 @@ La chiave può essere più colonne. Il caso del gruppo è codice società più c
 ### Listino, PDF, fase, privacy, 19 ottobre 2026
 
 «Ricetta listino» prepara il Product di Espo: codice, descrizione, prezzo, valuta. Non crea la scheda. In questa prova Product non c'è, e i campi restano vuoti finché la scheda non è già in Espo. Un collegamento PDF deposita i file in `scambio/{id}`: se il nome contiene la chiave dell'azienda, il file diventa un Document sul cliente, nella cartella e nel team indicati, e si sposta in `elaborati/`. Un nome senza quella chiave resta dov'è. Un ordine può proporre la fase di un'offerta: la fase non cambia finché, in Attività, non si conferma. L'export di una persona scarica ciò che Nesso ha scritto su quel contatto e su quell'azienda, salta i campi password, e non chiude né cancella. I test sono nella classe `ListinoPdfFasePrivacy` e nei giri `il pdf`, `l'ordine` e `l'export`.
+
+### Ingresso, 20 ottobre 2026
+
+La porta chiede un nome e una password. Il primo ingresso cambia le integrazioni; da Inizio si aggiunge chi lancia i giri e legge l'esito, e quello non salva un abbinamento. Senza ingresso non si apre la configurazione e non parte «Esegui ora». Le password non finiscono nel giornale né nello scarico. Webhook e casella restano sul token dell'indirizzo. `/api/health` resta aperto.
+
+I giri scrivono su Espo con l'utente `nesso`, creato via API, non con l'admin. La password sta nel volume locale e non esce nello scarico. Il ruolo copre le schede delle integrazioni accese, i collegamenti che quelle usano, e Document con Attachment se c'è un PDF. L'utente di Espo si legge e non si crea da quel ruolo. Una scheda fuori dal ruolo non si scrive. Le schede e i campi nuovi restano chiamate dell'admin di bootstrap, perché il gestore entità di Espo non è il giro.
+
+Un giro fallito accende in home un avviso con il nome dell'integrazione, una volta, non una volta per riga scartata. Se sull'integrazione si scrive «avvisa se tace da più di» tot minuti, e l'ultimo successo è più vecchio, compare un secondo avviso. La posta del motore, quando ci sarà, si aggancia a `deliver_notice`. Oggi quella funzione non invia, e non usa la posta di Espo.
+
+I test sono nella classe `IngressoRuoloAvviso` e nei giri `senza ingresso`, `il giro fallito` e `la scrittura`.
 
 ### Accensione, 19 ottobre 2026
 
@@ -134,10 +143,7 @@ Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. 
 
 ### Uso
 
-- Login, e due gesti: chi cambia l'integrazione, chi la lancia e legge l'esito.
-- Nesso parla con Espo con un utente suo, non con l'admin.
 - Prossimo giro, ultimo successo, ultimo errore, da quanto tace.
-- Avviso quando un giro fallisce o tace troppo. Il canale previsto è la posta del motore, sotto.
 - Ripetere una sola riga scartata, senza rilanciare tutto il file.
 - Errore col nome del campo.
 - Prova a secco del webhook: incollare un esempio. Oggi risponde che non ha righe.
@@ -159,5 +165,4 @@ Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. 
 
 ### In che ordine
 
-1. Login, utente Espo dedicato, avviso.
-2. I canali, a partire da quello che il carico vero non riesce a leggere.
+1. I canali, a partire da quello che il carico vero non riesce a leggere.

@@ -45,7 +45,6 @@ The local instance is the public image `espocrm/espocrm:10.0`, installed empty. 
 - `/api/pull` writes the sink and advances the cursor, because there the delivery is the read itself. The HTTP send does not: the cursor moves only after the POSTs that succeeded.
 - One run at a time. The second receives "a run is already in progress".
 - The external database password is in clear text in the SQLite file of the local volume.
-- Port 8091 has no login. Whoever reaches it configures and starts runs.
 - The scheduler has not been watched for a full 15-minute cycle.
 - There are no automatic tests.
 
@@ -76,6 +75,16 @@ The key can be several columns. The group case is company code plus customer cod
 ### Price list, PDF, stage, privacy, 19 October 2026
 
 "Price list recipe" prepares Espo's Product: code, description, price, currency. It does not create the entity. In this trial Product is not there, and the fields stay empty until the entity is already in Espo. A PDF connection drops files in `scambio/{id}`: if the name contains the company key, the file becomes a Document on the customer, in the named folder and team, and moves to `elaborati/`. A name without that key stays where it is. An order can propose an offer's stage: the stage does not change until it is confirmed in Activity. The export of one person downloads what Nesso wrote about that contact and that company, skips password fields, and does not close or delete. The tests are in the class `ListinoPdfFasePrivacy` and in the runs `il pdf`, `l'ordine` and `l'export`.
+
+### Sign-in, 20 October 2026
+
+The port asks for a name and a password. The first entry changes the integrations; from Home you add who runs the jobs and reads the result, and that person does not save a mapping. Without an entry the configuration does not open and "Run now" does not start. Passwords do not end up in the journal or in the download. Webhook and inbox stay on the token in the address. `/api/health` stays open.
+
+Runs write to Espo as the user `nesso`, created through the API, not as the admin. The password stays in the local volume and does not leave in the download. The role covers the entities of the enabled integrations, the links those use, and Document with Attachment if there is a PDF. Espo's user is read and is not created from that role. An entity outside the role is not written. New entities and fields stay calls of the bootstrap admin, because Espo's entity manager is not the run.
+
+A failed run lights a notice on home with the integration's name, once, not once per rejected row. If the integration says "warn if it stays quiet for more than" so many minutes, and the last success is older, a second notice appears. The engine mail, when it exists, attaches to `deliver_notice`. Today that function does not send, and it does not use Espo's mail.
+
+The tests are in the class `IngressoRuoloAvviso` and in the runs `senza ingresso`, `il giro fallito` and `la scrittura`.
 
 ### Switch-on, 19 October 2026
 
@@ -134,10 +143,7 @@ An item stays here until it is in the engine. Those already closed are not repea
 
 ### Use
 
-- Login, and two gestures: who changes the integration, who starts it and reads the result.
-- Nesso talks to Espo with its own user, not with the admin.
 - Next run, last success, last error, how long it has been silent.
-- A notice when a run fails or stays silent too long. The planned channel is the engine mail, below.
 - Repeat a single rejected row, without replaying the whole file.
 - An error with the field name.
 - Dry run of the webhook: paste an example. Today it answers that it has no rows.
@@ -159,5 +165,4 @@ An item stays here until it is in the engine. Those already closed are not repea
 
 ### In what order
 
-1. Login, a dedicated Espo user, a notice.
-2. The channels, starting from the one a real load cannot read.
+1. The channels, starting from the one a real load cannot read.

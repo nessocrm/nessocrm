@@ -1,7 +1,10 @@
-import os
 import json
+import os
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +13,8 @@ os.environ["DB_PATH"] = str(ROOT / "motore.sqlite")
 os.environ["SCAMBIO_DIR"] = str(ROOT / "scambio")
 
 import app
+
+REAL_REQUEST = app.espo_request
 
 
 class Row(dict):
@@ -36,6 +41,12 @@ class Giro(unittest.TestCase):
             conn.execute("DELETE FROM silence_payload")
             conn.execute("DELETE FROM plan_step")
             conn.execute("DELETE FROM stage_proposal")
+            conn.execute("DELETE FROM actor")
+            conn.execute("DELETE FROM session")
+            conn.execute("DELETE FROM notice")
+            conn.execute(
+                "DELETE FROM setting WHERE key IN ('espo_service_user', 'espo_service_secret', 'espo_service_label', 'espo_role_id', 'espo_role_entities')"
+            )
             conn.execute("UPDATE setting SET value = '1' WHERE key = 'writes'")
 
     def test_orario_fisso_sul_giro(self):
@@ -571,6 +582,119 @@ class Giro(unittest.TestCase):
         self.assertEqual(after, before)
         self.assertEqual(result["kept"], before)
         self.assertEqual([row["field"] for row in result["rows"]], ["emailAddress"])
+
+    def test_senza_ingresso_non_si_lancia_e_chi_lancia_non_salva(self):
+        server = app.ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            denied = self._post(port, "/api/pipelines/clienti/run", {})
+            self.assertEqual(denied["code"], 401)
+            self.assertNotIn("segreto-lungo", json.dumps(denied))
+            primo = self._post(port, "/api/ingresso/primo", {"name": "chi-cambia", "password": "segreto-lungo"})
+            self.assertEqual(primo["code"], 200)
+            self.assertEqual(primo["body"]["gesture"], "cambia")
+            cookie = primo["cookie"]
+            added = self._post(port, "/api/attori", {"name": "chi-lancia", "password": "altra-password", "gesture": "lancia"}, cookie)
+            self.assertEqual(added["code"], 200)
+            entra = self._post(port, "/api/ingresso", {"name": "chi-lancia", "password": "altra-password"})
+            self.assertEqual(entra["code"], 200)
+            blocked = self._post(port, "/api/pipelines", {"name": "x"}, entra["cookie"])
+            self.assertEqual(blocked["code"], 403)
+            allowed = self._post(port, "/api/pipelines/manca/run", {}, entra["cookie"])
+            self.assertNotIn(allowed["code"], (401, 403))
+            blob = json.dumps(app.export_config(), ensure_ascii=False) + json.dumps(app.snapshot(), ensure_ascii=False, default=str)
+            with app.connect() as conn:
+                journal = " ".join(row[0] or "" for row in conn.execute("SELECT detail FROM run_log").fetchall())
+            self.assertNotIn("segreto-lungo", blob)
+            self.assertNotIn("segreto-lungo", journal)
+            self.assertNotIn("altra-password", blob)
+        finally:
+            server.shutdown()
+
+    def test_il_giro_fallito_accende_un_avviso_solo(self):
+        with app.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, alert_minutes, enabled, last_success)
+                VALUES ('ordini', 'Ordini', 'in', 'Opportunity', 'codice', 'ordini:{codice}', '[]', 'cExternalKey', 60, 1, '2026-10-19 08:00:00')
+                """
+            )
+        sent = []
+        original = app.deliver_notice
+        app.deliver_notice = lambda notice: sent.append(notice)
+        try:
+            app.mark_run("ordini", "errore", "connessione rifiutata")
+            app.mark_run("ordini", "errore", "connessione rifiutata")
+            app.remember_reject("ordini", "O-1", {"codice": "O-1"}, "riga scartata")
+            with app.connect() as conn:
+                kinds = [row["kind"] for row in conn.execute("SELECT kind FROM notice WHERE open = 1")]
+            self.assertEqual(kinds, ["fallito"])
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0]["name"], "Ordini")
+            quiet = app.notice_quiet(datetime(2026, 10, 20, 12, 0, 0))
+            self.assertEqual(quiet, ["ordini"])
+            self.assertEqual(app.notice_quiet(datetime(2026, 10, 20, 12, 0, 0)), [])
+            home = app.snapshot()
+            texts = [item["text"] for item in home["alerts"]]
+            self.assertIn("Ordini: il giro non è riuscito.", texts)
+            self.assertIn("Ordini: tace da più di 60 minuti.", texts)
+            app.mark_run("ordini", "ok", "1 create", {"created": 1, "updated": 0, "closed": 0, "failed": 0})
+            with app.connect() as conn:
+                left = conn.execute("SELECT COUNT(*) AS n FROM notice WHERE open = 1").fetchone()["n"]
+            self.assertEqual(left, 0)
+        finally:
+            app.deliver_notice = original
+
+    def test_la_scrittura_non_e_dell_admin(self):
+        app.set_setting("espo_service_user", "nesso")
+        app.set_setting("espo_service_secret", "segreto-servizio")
+        app.set_setting("espo_role_entities", json.dumps(["Account"]))
+        seen = {}
+        original = app.espo_call
+
+        def fake(method, path, body=None, query=None, *, user, password):
+            seen["user"] = user
+            seen["password"] = password
+            return 201, {"id": "a1", "userName": user}
+
+        app.espo_call = fake
+        try:
+            REAL_REQUEST("POST", "/api/v1/Account", {"name": "Nord"})
+            self.assertEqual(seen["user"], "nesso")
+            self.assertEqual(seen["password"], "segreto-servizio")
+            app.espo_admin("GET", "/api/v1/Metadata")
+            self.assertEqual(seen["user"], app.ESPO_USER)
+            with self.assertRaises(RuntimeError):
+                REAL_REQUEST("POST", "/api/v1/Contact", {"name": "X"})
+        finally:
+            app.espo_call = original
+
+    def _post(self, port, path, body, cookie=""):
+        data = json.dumps(body).encode()
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=data,
+            method="POST",
+            headers={"Content-Type": "application/json", "Cookie": cookie},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                raw = response.read().decode()
+                header = response.headers.get("Set-Cookie") or ""
+                token = ""
+                if "nesso_sessione=" in header:
+                    token = header.split("nesso_sessione=", 1)[1].split(";", 1)[0]
+                return {"code": response.status, "body": json.loads(raw or "{}"), "cookie": f"nesso_sessione={token}" if token else cookie}
+        except urllib.error.HTTPError as error:
+            raw = error.read().decode()
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                parsed = {"error": raw}
+            return {"code": error.code, "body": parsed, "cookie": cookie}
 
 
 if __name__ == "__main__":

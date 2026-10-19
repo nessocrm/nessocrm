@@ -29,4 +29,4 @@ The export of one person is requested from Activity. It is not the close of a re
 
 ## Order, if the goal is adoption
 
-The items of this chapter are in the engine. The technical follow-up is in [Project](00-progetto.md): login, a dedicated Espo user, an alert.
+The items of this chapter are in the engine. The technical follow-up is in [Project](00-progetto.md): the channels.
