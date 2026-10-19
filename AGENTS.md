@@ -18,7 +18,7 @@ Ogni modifica al prodotto, alla demo, alle API, all'interfaccia o al marchio agg
 
 - Si aggiorna il capitolo che descrive già quel comportamento. Si rileggono le frasi vecchie (tetti, file che si spostano sempre, campi che non si svuotano, risposte di API senza i conteggi nuovi) e si correggono.
 - Una pagina nuova si crea solo se nessun capitolo parla di quella funzione. In quel caso si aggiunge in `docs/`, nella chiave `nav` di `mkdocs.yml` e nella tabella di `docs/index.md`.
-- I docs restano in italiano, in Markdown, e il build `py -3 -m mkdocs build --strict` deve passare. Niente link che escono da `docs/`: un file della root si cita per nome, non con un percorso relativo.
+- Il manuale è bilingue. L'italiano in `docs/` è la lingua di partenza; l'inglese è lo stesso capitolo in `docs/en/`, con lo stesso nome di file. Si aggiornano insieme. Il build `py -3 -m mkdocs build --strict` deve passare. Niente link che escono da `docs/`: un file della root si cita per nome, non con un percorso relativo.
 - Il fatto e il non fatto restano in `docs/00-progetto.md`. Una cosa fatta si toglie dall'elenco di ciò che manca.
 - Il marchio sta in `assets/logo`. Se cambia il segno, si rilancia `py -3 scripts/build_logo.py` e si aggiorna `docs/14-marchio.md`.
 

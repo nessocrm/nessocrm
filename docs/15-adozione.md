@@ -13,12 +13,11 @@ Niente di questo è nel motore, salvo ciò che è già archiviato nel capitolo P
 | Amministrazione | Un file storto chiude clienti o ne crea doppi | L'anteprima, la partita IVA già presente, l'annullamento del giro |
 | Chi installa Espo dal cliente | Ci mette settimane e poi non sa consegnare | Una ricetta, un piano di accensione, una pagina di consegna |
 
-Il numero in home, la quadratura, il file atteso e il badge sul record sono già nel motore.
+Il numero in home, la quadratura, il file atteso, il badge sul record, la proposta di abbinamento e la ricetta di anagrafiche sono già nel motore.
 
 ## Accendere senza un progetto
 
-- **Proposta di abbinamento.** Dai nomi delle colonne, in italiano: ragione sociale, partita IVA, email, telefono, città. Nesso propone il campo Espo. La persona conferma. Non scrive da sola.
-- **Ricette di export.** Layout di file che i gestionali già sanno produrre: anagrafiche, sedi, contatti. Una ricetta è un abbinamento pronto da rivedere, non un connettore certificato con quel gestionale.
+- **Ricette di sedi e contatti.** L'anagrafica clienti c'è già. Restano i layout che i gestionali producono per sedi e contatti: un abbinamento pronto da rivedere, non un connettore certificato.
 - **Più società nello stesso file.** La chiave è codice società più codice cliente. Un gruppo con tre ragioni sociali non mescola i clienti.
 - **Piano di accensione.** Prima solo lettura sulle anagrafiche. Poi scrittura delle anagrafiche. Poi i contatti. Ogni gradino ha la sua anteprima e si accende da solo solo se il precedente è stato confermato.
 - **Finestra di silenzio.** Un calendario: non scrivere durante la chiusura contabile, un inventario, una fiera. Il file che arriva in quei giorni resta in attesa.
@@ -37,7 +36,6 @@ Il numero in home, la quadratura, il file atteso e il badge sul record sono già
 
 ## In che ordine, se l'obiettivo è l'adozione
 
-1. Proposta di abbinamento e una ricetta di anagrafiche.
-2. Piano di accensione, finestra di silenzio, più società nello stesso file.
-3. Pagina di consegna e foglio di abbinamento.
-4. Listino, PDF sul cliente, fase proposta dall'ordine, export per la privacy.
+1. Piano di accensione, finestra di silenzio, più società nello stesso file. Poi le ricette di sedi e contatti.
+2. Pagina di consegna e foglio di abbinamento.
+3. Listino, PDF sul cliente, fase proposta dall'ordine, export per la privacy.

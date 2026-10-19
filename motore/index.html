@@ -31,6 +31,8 @@
     .nav-icon { width: 16px; height: 16px; flex: none; }
     .tab-divider { margin: 16px 16px 4px; font-size: 12px; font-weight: 500; color: #9aa0a6; }
     .navbar-foot { border-top: 1px solid #e6e8eb; padding: 4px 0 6px; flex: none; }
+    .lang-switch { display: block; padding: 6px 16px 8px; }
+    .lang-switch select { width: 100%; min-height: 32px; }
     button.minimizer, button.menu-toggle { width: 100%; min-height: 36px; border: 0; border-radius: 0; background: transparent; color: #5c5c5c; display: flex; align-items: center; padding: 0 16px; cursor: pointer; }
     button.minimizer:hover, button.menu-toggle:hover { background: #ececed; border: 0; color: #5c5c5c; }
     .minimizer svg, .menu-toggle svg { width: 14px; height: 14px; }
@@ -114,7 +116,7 @@
   </style>
 </head>
 <body>
-  <a class="skip" href="#contenuto">Vai al contenuto</a>
+  <a class="skip" href="#contenuto" data-i18n="Vai al contenuto">Vai al contenuto</a>
   <aside class="navbar" id="navbar">
     <div class="navbar-header">
       <a class="brand" href="#/">
@@ -127,31 +129,37 @@
         <span class="brand-name">Nesso</span>
       </a>
     </div>
-    <nav class="menu" aria-label="Sezioni">
+    <nav class="menu" aria-label="Sezioni" data-i18n-aria="Sezioni">
       <a href="#/" data-nav="/">
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#8b939c" d="M1 1h6v6H1V1zm8 0h6v6H9V1zM1 9h6v6H1V9zm8 0h6v6H9V9z"/></svg>
-        <span class="nav-label">Inizio</span>
+        <span class="nav-label" data-i18n="Inizio">Inizio</span>
       </a>
-      <div class="tab-divider">Espo</div>
+      <div class="tab-divider" data-i18n="Espo">Espo</div>
       <a href="#/schede" data-nav="/schede">
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#d19a2e" d="M2 2h5v5H2V2zm7 0h5v5H9V2zM2 9h5v5H2V9zm7 1.2h5V14H9v-3.8z"/></svg>
-        <span class="nav-label">Schede</span>
+        <span class="nav-label" data-i18n="Schede">Schede</span>
       </a>
-      <div class="tab-divider">Integrazione</div>
+      <div class="tab-divider" data-i18n="Integrazione">Integrazione</div>
       <a href="#/collegamenti" data-nav="/collegamenti">
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#3a7fc1" d="M6.3 9.7a3.2 3.2 0 0 1 0-4.5l1.8-1.8a3.2 3.2 0 0 1 4.5 4.5L11.4 9l-1.1-1.1 1.2-1.2a1.6 1.6 0 0 0-2.3-2.3L7.4 6.2a1.6 1.6 0 0 0 0 2.3l.4.4-1.1 1.1-.4-.3zm3.4-3.4a3.2 3.2 0 0 1 0 4.5l-1.8 1.8a3.2 3.2 0 0 1-4.5-4.5L4.6 7l1.1 1.1-1.2 1.2a1.6 1.6 0 0 0 2.3 2.3l1.8-1.8a1.6 1.6 0 0 0 0-2.3l-.4-.4 1.1-1.1.4.3z"/></svg>
-        <span class="nav-label">Collegamenti</span>
+        <span class="nav-label" data-i18n="Collegamenti">Collegamenti</span>
       </a>
       <a href="#/integrazioni" data-nav="/integrazioni">
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#2f9e8f" d="M1.5 4h9.1l-1.8-1.8 1.1-1.1L14 5.2l-4.1 4.1-1.1-1.1L10.6 6.4H1.5V4zm13 6.4H5.4l1.8 1.8-1.1 1.1L2 9.2l4.1-4.1 1.1 1.1-1.8 1.8h9.1v1.6z"/></svg>
-        <span class="nav-label">Integrazioni</span>
+        <span class="nav-label" data-i18n="Integrazioni">Integrazioni</span>
       </a>
       <a href="#/attivita" data-nav="/attivita">
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#6b7280" d="M2 3h2v2H2V3zm4 0h8v2H6V3zM2 7h2v2H2V7zm4 0h8v2H6V7zM2 11h2v2H2v-2zm4 0h8v2H6v-2z"/></svg>
-        <span class="nav-label">Attività</span>
+        <span class="nav-label" data-i18n="Attività">Attività</span>
       </a>
     </nav>
     <div class="navbar-foot">
+      <label class="lang-switch"><span class="sr" data-i18n="Lingua">Lingua</span>
+        <select id="lingua" aria-label="Lingua">
+          <option value="it">Italiano</option>
+          <option value="en">English</option>
+        </select>
+      </label>
       <a id="espo" href="http://localhost:8088" target="_blank" rel="noopener">
         <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="#5589ca" d="M3 2h6.2L13 5.8V14H3V2zm6 1.2V6h2.8L9 3.2zM4.5 8h7v1.2h-7V8zm0 2.4h7V12h-7v-1.6z"/></svg>
         <span class="nav-label">EspoCRM</span>
@@ -171,7 +179,7 @@
   </div>
   <p id="annuncio" class="sr" aria-live="polite"></p>
   <dialog id="conferma">
-    <h2 id="conferma-titolo">Conferma</h2>
+    <h2 id="conferma-titolo" data-i18n="Conferma">Conferma</h2>
     <p id="conferma-testo"></p>
     <div class="actions">
       <button type="button" class="secondary" id="conferma-no">Annulla</button>
@@ -179,6 +187,8 @@
     </div>
   </dialog>
   <script>
+    let lang = localStorage.getItem("nesso-lang") === "en" ? "en" : "it";
+    let en = {};
     const kindLabel = { webhook: "Webhook", database: "Database", csv: "File CSV", http: "Uscita HTTP" };
     const phrases = { creato: "Creato in Espo", aggiornato: "Aggiornato", invariato: "Invariato", synced: "Sincronizzato", inviato: "Inviato", ricevuto: "Ricevuto", scartato: "Scartato", errore: "Errore", ok: "Riuscito", lettura: "Solo lettura", conferma: "Chiusure da confermare", "in coda": "In coda da guardare", mancante: "File atteso non arrivato" };
     const main = document.querySelector("#contenuto");
@@ -190,6 +200,95 @@
     let draft = null;
     let lastPath = "";
 
+    function patternEn(raw) {
+      const rules = [
+        [/^Ogni giorno alle (.+)$/, found => "Every day at " + found[1]],
+        [/^Ogni (\d+) minuti$/, found => "Every " + found[1] + " minutes"],
+        [/^Passo (\d+) di 4$/, found => "Step " + found[1] + " of 4"],
+        [/^Abbinamento (\d+)$/, found => "Mapping " + found[1]],
+        [/^(\d+) create, (\d+) aggiornate, (\d+) chiuse, (\d+) scartate(.*)$/, found => found[1] + " created, " + found[2] + " updated, " + found[3] + " closed, " + found[4] + " rejected" + (found[5] === ", senza scrivere" ? ", without writing" : found[5])],
+        [/^(.+), passo (\d+)$/, found => t(found[1]) + ", step " + found[2]],
+        [/^(.+): il file atteso non è stato elaborato\.$/, found => found[1] + ": the expected file has not been processed."],
+        [/^Quadratura: (.+)\.$/, found => "Balance: " + balanceRest(found[1]) + "."],
+        [/^Quadratura rossa: (.+)\.$/, found => "Balance is off: " + balanceRest(found[1]) + "."],
+        [/^Ripristinati (\d+) campi, lasciati (\d+)\.$/, found => "Restored " + found[1] + " fields, kept " + found[2] + "."],
+        [/^Chiuse (\d+)\.$/, found => "Closed " + found[1] + "."]
+      ];
+      for (const [rule, fill] of rules) {
+        const found = raw.match(rule);
+        if (found) return fill(found);
+      }
+      return "";
+    }
+    function balanceRest(text) {
+      return text
+        .replace(/(\d+) solo in sorgente/g, "$1 only in the source")
+        .replace(/(\d+) solo in Espo/g, "$1 only in Espo")
+        .replace(/(\d+) in sorgente/g, "$1 in the source")
+        .replace(/scarto importi ([0-9.\-]+)/g, "amount gap $1");
+    }
+    function t(source, vars) {
+      const raw = String(source ?? "");
+      let modello = lang === "en" ? (en[raw] || patternEn(raw) || raw) : raw;
+      if (vars) Object.keys(vars).forEach(name => { modello = modello.split("{" + name + "}").join(String(vars[name] ?? "")); });
+      return modello;
+    }
+    function frase(item) {
+      if (!item) return "";
+      if (typeof item === "string") return t(item);
+      const params = Object.assign({}, item.textParams || {});
+      if (params.testo) params.testo = t(params.testo);
+      if (item.textKey) return t(item.textKey, params);
+      return t(item.text || "");
+    }
+    function translateTree(root) {
+      if (!root || lang !== "en") return;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach(item => {
+        const raw = item.nodeValue;
+        const trimmed = raw.trim();
+        if (trimmed.length < 2) return;
+        const done = t(trimmed);
+        if (done === trimmed) return;
+        const lead = raw.match(/^\s*/)[0];
+        const tail = raw.match(/\s*$/)[0];
+        item.nodeValue = lead + done + (tail === raw ? "" : tail);
+      });
+      root.querySelectorAll("[placeholder], [aria-label]").forEach(el => {
+        ["placeholder", "aria-label"].forEach(attr => {
+          const value = el.getAttribute(attr);
+          if (!value) return;
+          const done = t(value);
+          if (done !== value) el.setAttribute(attr, done);
+        });
+      });
+    }
+    function applyChrome() {
+      document.documentElement.lang = lang;
+      document.querySelectorAll("[data-i18n]").forEach(node => { node.textContent = t(node.getAttribute("data-i18n")); });
+      document.querySelectorAll("[data-i18n-aria]").forEach(node => { node.setAttribute("aria-label", t(node.getAttribute("data-i18n-aria"))); });
+      const menuBtn = document.querySelector("#menu-toggle");
+      const minBtn = document.querySelector("#nav-min");
+      if (menuBtn) menuBtn.setAttribute("aria-label", t("Apri il menu"));
+      if (minBtn) minBtn.setAttribute("aria-label", t("Riduci il menu"));
+      document.querySelector("#conferma-no").textContent = t("Annulla");
+      document.querySelector("#conferma-si").textContent = t("Elimina");
+      const lingua = document.querySelector("#lingua");
+      if (lingua) {
+        lingua.value = lang;
+        lingua.setAttribute("aria-label", t("Lingua"));
+      }
+    }
+    const _fetch = window.fetch.bind(window);
+    window.fetch = (url, opts) => {
+      const options = opts ? Object.assign({}, opts) : {};
+      const headers = new Headers(options.headers || {});
+      if (!headers.has("X-Nesso-Lang")) headers.set("X-Nesso-Lang", lang);
+      options.headers = headers;
+      return _fetch(url, options);
+    };
     function esc(value) {
       return String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
     }
@@ -215,8 +314,10 @@
     }
 
     function shell(title, html) {
-      document.title = title + " · Nesso";
+      document.title = t(title) + " · Nesso";
       main.innerHTML = html;
+      translateTree(main);
+      applyChrome();
       const here = pathOf();
       document.querySelectorAll("[data-nav]").forEach(link => {
         const on = here === link.dataset.nav || (link.dataset.nav !== "/" && here.startsWith(link.dataset.nav));
@@ -255,8 +356,8 @@
         <section class="panel ${homeRed ? "bad" : ""}">
           <div class="page-title"><h2>Anagrafiche</h2>${morningBadge}</div>
           <strong class="dashlet-count">${morningNumber}</strong>
-          <p>${esc(morning.text || "")}</p>
-          ${alerts.map(item => `<p>${esc(item)}</p>`).join("")}
+          <p>${esc(frase(morning))}</p>
+          ${alerts.map(item => `<p>${esc(frase(item))}</p>`).join("")}
         </section>
         <div class="dashlets">
           <a class="dashlet" href="#/schede">
@@ -282,13 +383,13 @@
         </div>
         <details class="panel">
           <summary>Accesso all'Espo di questa prova</summary>
-          <p>Utente <strong>admin</strong>, password <strong>locale-admin</strong>. Vale solo per l'istanza su questo PC.</p>
+          <p><span data-i18n="Utente">Utente</span> <strong>admin</strong>, <span data-i18n="password">password</span> <strong>locale-admin</strong>. <span data-i18n="Vale solo per l'istanza su questo PC.">Vale solo per l'istanza su questo PC.</span></p>
         </details>
       `);
       const writes = document.querySelector("#writes");
       if (writes) writes.addEventListener("change", async () => {
         await fetch("/api/scritture", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: writes.checked }) });
-        say(writes.checked ? "Le scritture sono accese." : "Le scritture verso Espo sono ferme.");
+        say(writes.checked ? t("Le scritture sono accese.") : t("Le scritture verso Espo sono ferme."));
         await refresh();
       });
     }
@@ -405,16 +506,17 @@
         }
         const response = await fetch("/api/connections", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const data = await response.json();
-        if (!response.ok) return showError(data.error || "Non sono riuscito a salvare.");
-        say(existing ? "Collegamento aggiornato." : "Collegamento creato.");
+        if (!response.ok) return showError(data.error || t("Non sono riuscito a salvare."));
+        say(existing ? t("Collegamento aggiornato.") : t("Collegamento creato."));
         location.hash = "#/collegamenti";
       });
     }
 
     function showError(text) {
       const box = document.querySelector("#form-error");
-      if (box) box.textContent = text;
-      say(text);
+      const shown = t(text);
+      if (box) box.textContent = shown;
+      say(shown);
     }
 
     function integrationsPage() {
@@ -428,13 +530,13 @@
         ${items.map(item => {
           const link = connectionOf(item.connection_id);
           const entity = entityOf(item.espo_entity);
-          const when = item.enabled === 0 ? "In pausa" : (item.schedule_at ? "Ogni giorno alle " + item.schedule_at : (item.schedule_minutes ? "Ogni " + item.schedule_minutes + " minuti" : "Solo a comando, oppure all'arrivo di un webhook"));
+          const when = item.enabled === 0 ? t("In pausa") : (item.schedule_at ? t("Ogni giorno alle {ora}", { ora: item.schedule_at }) : (item.schedule_minutes ? t("Ogni {minuti} minuti", { minuti: item.schedule_minutes }) : t("Solo a comando, oppure all'arrivo di un webhook")));
           const counts = item.counts || {};
-          const summary = item.counts ? `${counts.created || 0} create, ${counts.updated || 0} aggiornate, ${counts.closed || 0} chiuse, ${counts.failed || 0} scartate${counts.held ? ", senza scrivere" : ""}` : "";
-          const outcome = item.last_status === "errore" ? "Errore" : (item.last_run ? "Ultimo giro riuscito" : "Mai eseguita");
+          const summary = item.counts ? t("{create} create, {aggiornate} aggiornate, {chiuse} chiuse, {scartate} scartate", { create: counts.created || 0, aggiornate: counts.updated || 0, chiuse: counts.closed || 0, scartate: counts.failed || 0 }) + (counts.held ? t(", senza scrivere") : "") : "";
+          const outcome = item.last_status === "errore" ? t("Errore") : (item.last_run ? t("Ultimo giro riuscito") : t("Mai eseguita"));
           const before = (state.pipelines || []).find(row => row.id === item.depends_on);
-          const balance = item.balance && item.balance.text ? item.balance.text : "";
-          const late = item.file_alert ? "File atteso, non ancora elaborato." : "";
+          const balance = item.balance && item.balance.text ? t(item.balance.text) : "";
+          const late = item.file_alert ? t("File atteso, non ancora elaborato.") : "";
           const redCard = (item.balance && item.balance.ok === false) || item.file_alert;
           return `<article class="panel ${redCard ? "bad" : ""}">
             <h2>${esc(item.name)}</h2>
@@ -444,7 +546,7 @@
               <dt>Collegamento</dt><dd>${esc(link ? link.name : "Nessuno")}</dd>
               <dt>Quando</dt><dd>${esc(when)}</dd>
               ${before ? `<dt>Prima</dt><dd>${esc(before.name)}</dd>` : ""}
-              <dt>Esito</dt><dd>${esc(outcome)}${summary ? ". " + esc(summary) : ""}${item.read_only ? ". Modalità lettura" : ""}</dd>
+              <dt>Esito</dt><dd>${esc(outcome)}${summary ? ". " + esc(summary) : ""}${item.read_only ? ". " + esc(t("Modalità lettura")) : ""}</dd>
               ${balance ? `<dt>Quadratura</dt><dd>${esc(balance)}</dd>` : ""}
               ${late ? `<dt>File</dt><dd>${esc(late)}</dd>` : ""}
             </dl>
@@ -487,7 +589,7 @@
       const box = main.querySelector(`[data-msg="${id}"]`);
       const button = main.querySelector(`[data-run="${id}"]`);
       button.disabled = true;
-      box.textContent = "Esecuzione in corso.";
+      box.textContent = t("Esecuzione in corso.");
       const response = await fetch("/api/pipelines/" + id + "/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -495,8 +597,8 @@
       });
       const data = await response.json();
       const text = response.ok
-        ? (data.waiting ? "In attesa di chiamate sul webhook." : (data.failed ? "Esecuzione interrotta. Le righe scartate sono in Attività." : "Esecuzione terminata. Il dettaglio è nel riquadro."))
-        : (data.error || "Esecuzione non riuscita.");
+        ? (data.waiting ? t("In attesa di chiamate sul webhook.") : (data.failed ? t("Esecuzione interrotta. Le righe scartate sono in Attività.") : t("Esecuzione terminata. Il dettaglio è nel riquadro.")))
+        : (data.error || t("Esecuzione non riuscita."));
       say(text);
       await refresh();
       const again = main.querySelector(`[data-msg="${id}"]`);
@@ -505,11 +607,11 @@
 
     async function dry(id) {
       const box = main.querySelector(`[data-msg="${id}"]`);
-      box.textContent = "Prova in corso, senza scrivere su Espo.";
+      box.textContent = t("Prova in corso, senza scrivere su Espo.");
       const response = await fetch("/api/pipelines/" + id + "/dry", { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
-        box.textContent = data.error || "Prova non riuscita.";
+        box.textContent = data.error || t("Prova non riuscita.");
         return;
       }
       const rows = data.rows || [];
@@ -519,10 +621,10 @@
 
     async function previewRun(id) {
       const box = main.querySelector(`[data-msg="${id}"]`);
-      box.textContent = "Anteprima in corso, senza scrivere su Espo.";
+      box.textContent = t("Anteprima in corso, senza scrivere su Espo.");
       const response = await fetch("/api/pipelines/" + id + "/anteprima", { method: "POST" });
       const data = await response.json();
-      if (!response.ok) { box.textContent = data.error || "Anteprima non riuscita."; return; }
+      if (!response.ok) { box.textContent = data.error || t("Anteprima non riuscita."); return; }
       const dangerous = (data.pericolose || []).map(item => item.field + " da " + item.today + " a " + item.incoming).join("; ");
       box.textContent = (data.detail || "") + (dangerous ? " Righe pericolose: " + dangerous : "");
     }
@@ -533,7 +635,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled, hours: 48 })
       });
-      say(enabled ? "Modalità lettura per 48 ore. Alla scadenza la scrittura non parte da sola." : "Modalità lettura spenta.");
+      say(enabled ? t("Modalità lettura per 48 ore. Alla scadenza la scrittura non parte da sola.") : t("Modalità lettura spenta."));
       await refresh();
     }
 
@@ -541,14 +643,14 @@
       const box = main.querySelector(`[data-msg="${id}"]`);
       const response = await fetch("/api/pipelines/" + id + "/annulla", { method: "POST" });
       const data = await response.json();
-      box.textContent = response.ok ? ("Ripristinati " + data.restored + " campi, lasciati " + data.kept + ".") : (data.error || "Annullamento non riuscito.");
+      box.textContent = response.ok ? t("Ripristinati {n} campi, lasciati {m}.", { n: data.restored, m: data.kept }) : (data.error || t("Annullamento non riuscito."));
     }
 
     async function confirmCloses(id) {
       const box = main.querySelector(`[data-msg="${id}"]`);
       const response = await fetch("/api/pipelines/" + id + "/chiusure", { method: "POST" });
       const data = await response.json();
-      box.textContent = response.ok ? ("Chiuse " + data.closed + ".") : (data.error || "Conferma non riuscita.");
+      box.textContent = response.ok ? t("Chiuse {n}.", { n: data.closed }) : (data.error || t("Conferma non riuscita."));
       if (response.ok) await refresh();
     }
 
@@ -558,7 +660,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled })
       });
-      say(enabled ? "Integrazione riattivata." : "Integrazione in pausa.");
+      say(enabled ? t("Integrazione riattivata.") : t("Integrazione in pausa."));
       await refresh();
     }
 
@@ -578,9 +680,9 @@
         const body = JSON.parse(await file.text());
         const response = await fetch("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const data = await response.json();
-        say(response.ok ? "Configurazione caricata." : (data.error || "Caricamento non riuscito."));
+        say(response.ok ? t("Configurazione caricata.") : (data.error || t("Caricamento non riuscito.")));
       } catch (error) {
-        say("Il file non è una configurazione.");
+        say(t("Il file non è una configurazione."));
       }
       await refresh();
     }
@@ -746,14 +848,15 @@
           <input name="externalIdField" value="${esc(draft.externalIdField)}" required autocomplete="off" list="colonne">
           <span class="hint">Lo stesso record, con lo stesso valore, aggiorna la scheda invece di crearne un'altra.</span>
         </label>`;
-      return `${identity}<div id="campione" class="hint"></div><div id="map-rows">${rows}</div><button type="button" class="secondary" id="add-row">Aggiungi un abbinamento</button>`;
+      const tools = outbound ? "" : `<div class="actions"><button type="button" class="secondary" id="proponi">Proponi l'abbinamento</button><button type="button" class="secondary" id="ricetta">Ricetta anagrafiche</button></div><p class="hint">Non è un connettore certificato con un gestionale. È un abbinamento pronto da rivedere.</p>`;
+      return `${identity}${tools}<div id="campione" class="hint"></div><div id="map-rows">${rows}</div><button type="button" class="secondary" id="add-row">Aggiungi un abbinamento</button>`;
     }
 
     function mapFieldset(row, index, outbound) {
       if (outbound) {
         return `<fieldset data-row>
           <legend>Abbinamento ${index + 1}</legend>
-          <label>Campo di Espo <select class="espo">${options(fieldChoices(draft.espoEntity, false), "name", "label", row.from)}</select></label>
+          <label>Campo di Espo <select class="espo"><option value="">Scegli</option>${options(fieldChoices(draft.espoEntity, false), "name", "label", row.from)}</select></label>
           <label>Nome che riceve il sistema esterno <input class="ext" value="${esc(row.to)}" autocomplete="off"></label>
           <button type="button" class="secondary remove">Togli questo abbinamento</button>
         </fieldset>`;
@@ -761,13 +864,14 @@
       const role = row.role || "field";
       const fieldBlock = draft.entityMode === "new"
         ? `<label>Nome del campo nuovo <input class="field-label" value="${esc(row.to)}" autocomplete="off"></label>`
-        : `<label>Campo di Espo <select class="espo">${options(fieldChoices(draft.espoEntity, false), "name", "label", row.to)}</select></label>`;
+        : `<label>Campo di Espo <select class="espo"><option value="">Scegli</option>${options(fieldChoices(draft.espoEntity, false), "name", "label", row.to)}</select></label>`;
       const foreign = catalog.filter(item => item.name !== draft.espoEntity);
       const foreignName = row.lookupEntity || (foreign[0] && foreign[0].name);
       const multi = multiLinks(draft.espoEntity, row.lookupEntity);
       return `<fieldset data-row>
         <legend>Abbinamento ${index + 1}</legend>
         <label>Colonna del sistema esterno <input class="ext" value="${esc(row.from)}" autocomplete="off" list="colonne"></label>
+        ${row.sample ? `<span class="hint">${esc(t("Come verrebbe letta"))}: ${esc(row.reading && row.reading !== row.sample ? row.sample + " → " + row.reading : row.sample)}</span>` : ""}
         <fieldset class="radios">
           <legend>Che cosa ne facciamo</legend>
           <label><input type="radio" class="role" name="role-${index}" value="field" ${role === "field" ? "checked" : ""}> Lo scriviamo in un campo</label>
@@ -830,6 +934,7 @@
       const paint = (keepDraft) => {
         if (!keepDraft) readStep(3);
         document.querySelector("#map-rows").innerHTML = draft.rows.map((row, index) => mapFieldset(row, index, outbound)).join("");
+        translateTree(document.querySelector("#map-rows"));
         hook();
       };
       const hook = () => {
@@ -854,6 +959,66 @@
         draft.rows.push(emptyRow());
         paint(true);
       });
+      const proponi = document.querySelector("#proponi");
+      if (proponi) proponi.addEventListener("click", () => proposeMapping(paint));
+      const ricetta = document.querySelector("#ricetta");
+      if (ricetta) ricetta.addEventListener("click", () => applyRecipe(paint));
+    }
+
+    function catalogFields(entityName) {
+      return fieldChoices(entityName, false).map(field => ({ name: field.name, label: field.label }));
+    }
+
+    async function proposeMapping(paint) {
+      readStep(3);
+      let samples = draft.samples || [];
+      if (!samples.length && draft.connectionId) {
+        const response = await fetch("/api/connections/" + draft.connectionId + "/campione", { method: "POST" });
+        const data = await response.json();
+        samples = data.rows || [];
+        draft.samples = samples;
+      }
+      const stored = ((connectionOf(draft.connectionId) || {}).config || {}).columns || [];
+      const columns = stored.length ? stored : (samples.length ? Object.keys(samples[0]) : draft.rows.map(row => row.from).filter(Boolean));
+      const response = await fetch("/api/proponi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ columns, fields: catalogFields(draft.espoEntity), samples })
+      });
+      const data = await response.json();
+      if (!response.ok) return showError(data.error || "Non sono riuscito a salvare.");
+      const identity = (data.rows || []).find(row => row.role === "identity" && row.known);
+      if (identity) draft.externalIdField = identity.from;
+      const mapped = (data.rows || []).filter(row => row.role !== "identity").map(row => ({
+        ...emptyRow(),
+        from: row.from,
+        to: row.to || "",
+        sample: row.sample || "",
+        reading: row.reading || ""
+      }));
+      draft.rows = mapped.length ? mapped : [emptyRow()];
+      paint(true);
+      const identityInput = document.querySelector("[name=externalIdField]");
+      if (identityInput) identityInput.value = draft.externalIdField || "";
+      say(t("Proposta applicata. Non è stata scritta finché non salvi."));
+    }
+
+    async function applyRecipe(paint) {
+      const response = await fetch("/api/ricette/anagrafiche", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields: catalogFields("Account") })
+      });
+      const data = await response.json();
+      if (!response.ok) return showError(data.error || "Non sono riuscito a salvare.");
+      draft.entityMode = "existing";
+      draft.espoEntity = data.entity;
+      draft.externalIdField = data.externalIdField;
+      draft.rows = (data.rows || []).map(row => ({ ...emptyRow(), from: row.from, to: row.to || "", kind: row.kind || "" }));
+      paint(true);
+      const identityInput = document.querySelector("[name=externalIdField]");
+      if (identityInput) identityInput.value = draft.externalIdField || "";
+      say(t(data.noteKey || "Ricetta applicata. Rivedi l'abbinamento prima di salvare."));
     }
 
     function stepReview() {
@@ -1047,9 +1212,9 @@
       const response = await fetch("/api/pipelines", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await response.json();
       button.disabled = false;
-      if (!response.ok) return showError(data.error || "Non sono riuscito a salvare.");
+      if (!response.ok) return showError(data.error || t("Non sono riuscito a salvare."));
       draft = null;
-      say("Integrazione salvata.");
+      say(t("Integrazione salvata."));
       catalog = [];
       location.hash = "#/integrazioni";
     }
@@ -1100,7 +1265,7 @@
           body: JSON.stringify({ keep: button.dataset.keep })
         });
         const data = await response.json();
-        say(response.ok ? "Scelta registrata." : (data.error || "Scelta non riuscita."));
+        say(response.ok ? t("Scelta registrata.") : (data.error || t("Scelta non riuscita.")));
         if (response.ok) await refresh();
       }));
     }
@@ -1113,14 +1278,14 @@
       main.querySelectorAll("[data-del-c], [data-del-p]").forEach(button => {
         button.addEventListener("click", () => {
           const connection = button.dataset.delC;
-          document.querySelector("#conferma-titolo").textContent = connection ? "Eliminare questo collegamento?" : "Eliminare questa integrazione?";
-          document.querySelector("#conferma-testo").textContent = button.dataset.name + (connection ? ". Le integrazioni che lo usano restano, senza canale." : ". I record già scritti su Espo restano.");
+          document.querySelector("#conferma-titolo").textContent = connection ? t("Eliminare questo collegamento?") : t("Eliminare questa integrazione?");
+          document.querySelector("#conferma-testo").textContent = button.dataset.name + (connection ? t(". Le integrazioni che lo usano restano, senza canale.") : t(". I record già scritti su Espo restano."));
           dialog.showModal();
           document.querySelector("#conferma-si").onclick = async () => {
             const url = connection ? "/api/connections/" + connection : "/api/pipelines/" + button.dataset.delP;
             await fetch(url, { method: "DELETE" });
             dialog.close();
-            say("Eliminato.");
+            say(t("Eliminato."));
             await refresh();
           };
         });
@@ -1327,8 +1492,24 @@
       if (!here.startsWith("/integrazioni/nuova") && !here.startsWith("/integrazioni/modifica")) draft = null;
       refresh();
     });
-    if (!location.hash) location.hash = "#/";
-    refresh();
+    document.querySelector("#lingua").addEventListener("change", (event) => {
+      lang = event.target.value === "en" ? "en" : "it";
+      localStorage.setItem("nesso-lang", lang);
+      applyChrome();
+      render();
+    });
+    async function boot() {
+      try {
+        const data = await (await fetch("/api/frasi")).json();
+        en = data.en || {};
+      } catch (error) {
+        en = {};
+      }
+      applyChrome();
+      if (!location.hash) location.hash = "#/";
+      refresh();
+    }
+    boot();
   </script>
 </body>
 </html>

@@ -89,4 +89,4 @@ py -3 -m pip install -r requirements-docs.txt
 py -3 -m mkdocs serve
 ```
 
-Si apre su http://127.0.0.1:8000. Il controllo, senza avviare il server, è `py -3 -m mkdocs build --strict`. La configurazione è `mkdocs.yml`. I capitoli stanno in `docs/` e il menu del sito è la chiave `nav` di quel file.
+Si apre su http://127.0.0.1:8000. Il controllo, senza avviare il server, è `py -3 -m mkdocs build --strict`. La configurazione è `mkdocs.yml`. I capitoli italiani stanno in `docs/` e gli stessi capitoli in inglese stanno in `docs/en/`, con lo stesso nome di file. Il menu del sito è la chiave `nav` di `mkdocs.yml`. Il cambio lingua sta nell'intestazione del sito.

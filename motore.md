@@ -8,7 +8,7 @@ Il progetto si chiama Nesso. L'applicazione sta in questa cartella: è il legame
 
 Che cosa è già fatto e che cosa manca, posta del motore compresa: [docs/00-progetto.md](docs/00-progetto.md).
 
-Il manuale è in [docs/index.md](docs/index.md). Si pubblica con MkDocs: `py -3 -m mkdocs serve`.
+Il manuale è in [docs/index.md](docs/index.md), in italiano, e in `docs/en/`, in inglese. Si pubblica con MkDocs: `py -3 -m mkdocs serve`.
 
 | Per fare | Apri |
 |---|---|

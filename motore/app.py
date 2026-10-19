@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import carico
+import frasi
 
 DB_PATH = Path(os.environ.get("DB_PATH", "/data/motore.sqlite"))
 ESPO_BASE = os.environ.get("ESPO_BASE_URL", "http://espocrm").rstrip("/")
@@ -1009,7 +1010,7 @@ def ingest(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
                 show_on_layout(row["espo_entity"], [badge_field])
         except Exception:
             pass
-        outgoing[badge_field] = carico.badge_gestionale(when)
+        outgoing[badge_field] = carico.badge_gestionale(when, frasi.lingua_corrente())
         espo_id, action = upsert(
             row["espo_entity"],
             outgoing,
@@ -1354,7 +1355,7 @@ def apply_person_badges(entity: str, records: list[dict], engine_names: set[str]
             continue
         stamp = str(record.get("modifiedAt") or "")[:19]
         when = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
-        text = carico.badge_persona(str(record.get("modifiedByName") or "").strip(), when)
+        text = carico.badge_persona(str(record.get("modifiedByName") or "").strip(), when, frasi.lingua_corrente())
         code, _result = espo_request("PUT", f"/api/v1/{entity}/{espo_id}", {field: text})
         if code not in (200, 201):
             continue
@@ -1367,7 +1368,14 @@ def registry_morning(pipelines: list[dict], now: datetime | None = None) -> dict
     moment = now or datetime.now()
     rows = [item for item in pipelines if item.get("direction") == "in" and item.get("espo_entity") == "Account"]
     if not rows:
-        return {"percent": None, "tone": "niente", "today": False, "text": "Nessuna integrazione di anagrafiche."}
+        return {
+            "percent": None,
+            "tone": "niente",
+            "today": False,
+            "text": "Nessuna integrazione di anagrafiche.",
+            "textKey": "Nessuna integrazione di anagrafiche.",
+            "textParams": {},
+        }
     source = aligned = 0
     last_success = None
     failed_today = False
@@ -1416,10 +1424,18 @@ def snapshot() -> dict:
     alerts = []
     for item in pipelines:
         if item.get("file_alert"):
-            alerts.append(f"{item['name']}: il file atteso non è stato elaborato.")
+            alerts.append({
+                "text": f"{item['name']}: il file atteso non è stato elaborato.",
+                "textKey": "{nome}: il file atteso non è stato elaborato.",
+                "textParams": {"nome": item["name"]},
+            })
         balance = item.get("balance")
         if isinstance(balance, dict) and balance.get("ok") is False:
-            alerts.append(f"{item['name']}: {balance.get('text')}")
+            alerts.append({
+                "text": f"{item['name']}: {balance.get('text')}",
+                "textKey": "{nome}: {testo}",
+                "textParams": {"nome": item["name"], "testo": balance.get("text")},
+            })
     return {
         "state": STATE,
         "espoPublicUrl": ESPO_PUBLIC,
@@ -3042,7 +3058,11 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode())
 
+    def send_fail(self, status: int, error) -> None:
+        self.send_json(status, {"error": frasi.traduci(str(error), frasi.lingua_corrente())})
+
     def do_GET(self) -> None:
+        frasi.imposta_lingua(self.headers.get("X-Nesso-Lang"))
         path = urllib.parse.urlparse(self.path).path
         if path == "/":
             raw = PAGE_PATH.read_text(encoding="utf-8").encode()
@@ -3074,15 +3094,19 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/health":
                 self.send_json(200, {"ok": True, **STATE})
                 return
+            if path == "/api/frasi":
+                self.send_json(200, frasi.catalogo())
+                return
             if path == "/api/export":
                 self.send_json(200, export_config())
                 return
         except Exception as error:
-            self.send_json(400, {"error": str(error)})
+            self.send_fail(400, error)
             return
-        self.send_json(404, {"error": "non trovato"})
+        self.send_fail(404, "non trovato")
 
     def do_POST(self) -> None:
+        frasi.imposta_lingua(self.headers.get("X-Nesso-Lang"))
         path = urllib.parse.urlparse(self.path).path
         parts = [part for part in path.split("/") if part]
         try:
@@ -3138,6 +3162,21 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ["api", "connections"] and parts[3] == "campione":
                 self.send_json(200, connection_sample(parts[2]))
                 return
+            if path == "/api/proponi":
+                body = self.read_json()
+                self.send_json(200, {
+                    "rows": carico.propose(
+                        list(body.get("columns") or []),
+                        frasi.lingua_corrente(),
+                        list(body.get("fields") or []),
+                        list(body.get("samples") or []),
+                    )
+                })
+                return
+            if path == "/api/ricette/anagrafiche":
+                body = self.read_json()
+                self.send_json(200, carico.recipe_anagrafiche(list(body.get("fields") or [])))
+                return
             if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "enabled":
                 body = self.read_json()
                 self.send_json(200, set_enabled(parts[2], body.get("enabled") not in (False, 0, "0")))
@@ -3155,23 +3194,24 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(200, ingest(pipeline_id, body))
                 except Exception as error:
                     remember_reject(pipeline_id, "", body, str(error))
-                    self.send_json(400, {"error": str(error)})
+                    self.send_fail(400, error)
                 return
             if path.startswith("/api/pull/"):
                 self.send_json(200, pull(path.removeprefix("/api/pull/")))
                 return
         except PermissionError as error:
-            self.send_json(401, {"error": str(error)})
+            self.send_fail(401, error)
             return
         except KeyError:
-            self.send_json(404, {"error": "non trovato"})
+            self.send_fail(404, "non trovato")
             return
         except Exception as error:
-            self.send_json(400, {"error": str(error)})
+            self.send_fail(400, error)
             return
-        self.send_json(404, {"error": "non trovato"})
+        self.send_fail(404, "non trovato")
 
     def do_DELETE(self) -> None:
+        frasi.imposta_lingua(self.headers.get("X-Nesso-Lang"))
         path = urllib.parse.urlparse(self.path).path
         try:
             if path.startswith("/api/pipelines/"):
@@ -3183,14 +3223,14 @@ class Handler(BaseHTTPRequestHandler):
                     conn.execute("UPDATE pipeline SET connection_id = NULL WHERE connection_id = ?", (connection_id,))
                     deleted = conn.execute("DELETE FROM connection WHERE id = ?", (connection_id,)).rowcount
                 if not deleted:
-                    self.send_json(404, {"error": "collegamento non trovato"})
+                    self.send_fail(404, "collegamento non trovato")
                     return
                 self.send_json(200, {"deleted": connection_id})
                 return
         except Exception as error:
-            self.send_json(400, {"error": str(error)})
+            self.send_fail(400, error)
             return
-        self.send_json(404, {"error": "non trovato"})
+        self.send_fail(404, "non trovato")
 
 
 def main() -> None:

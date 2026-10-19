@@ -2,7 +2,7 @@
 
 # Nesso
 
-Manuale di Nesso. Il fatto e il non fatto sono in [00-progetto.md](00-progetto.md). La fotografia di un backup di produzione non fa parte di questo repo.
+Manuale di Nesso, in italiano e in inglese. Il fatto e il non fatto sono in [00-progetto.md](00-progetto.md). La fotografia di un backup di produzione non fa parte di questo repo.
 
 L'applicazione è un middleware. Da un lato c'è EspoCRM, dall'altro un sistema esterno. I due si parlano solo attraverso questa app. La scheda di Espo, i campi e il canale non sono scritti nel codice: si configurano. Il codice sa fare quattro canali (webhook, database in lettura, file CSV, HTTP in uscita) e, per ciascuno, creare o aggiornare qualunque scheda che Espo espone nel proprio metadata.
 

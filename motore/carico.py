@@ -285,6 +285,8 @@ def morning_alignment(
             "today": False,
             "successAt": None,
             "text": "Nessun giro di anagrafiche è riuscito.",
+            "textKey": "Nessun giro di anagrafiche è riuscito.",
+            "textParams": {},
         }
     today = now.strftime("%Y-%m-%d")
     success_today = last_success[:10] == today and last_status == "ok"
@@ -292,17 +294,37 @@ def morning_alignment(
     hour = last_success[11:16]
     if success_today:
         if percent is None:
+            key = "Giro riuscito alle {hour}. Non c'è ancora un confronto."
             text = f"Giro riuscito alle {hour}. Non c'è ancora un confronto."
         else:
+            key = "{percent}% di anagrafiche allineate. Ultimo giro riuscito alle {hour}."
             text = f"{percent}% di anagrafiche allineate. Ultimo giro riuscito alle {hour}."
-        return {"percent": percent, "tone": "ok", "today": True, "successAt": last_success, "text": text}
+        return {
+            "percent": percent,
+            "tone": "ok",
+            "today": True,
+            "successAt": last_success,
+            "text": text,
+            "textKey": key,
+            "textParams": {"percent": percent if percent is not None else "", "hour": hour},
+        }
     if last_status not in (None, "ok"):
         text = f"Il giro di oggi non è riuscito. L'ultimo successo resta il {last_success}."
         tone = "rosso"
+        key = "Il giro di oggi non è riuscito. L'ultimo successo resta il {quando}."
     else:
         text = f"Oggi non c'è ancora un giro riuscito. L'ultimo successo è il {last_success}."
         tone = "attesa"
-    return {"percent": None, "tone": tone, "today": False, "successAt": last_success, "text": text}
+        key = "Oggi non c'è ancora un giro riuscito. L'ultimo successo è il {quando}."
+    return {
+        "percent": None,
+        "tone": tone,
+        "today": False,
+        "successAt": last_success,
+        "text": text,
+        "textKey": key,
+        "textParams": {"quando": last_success},
+    }
 
 
 def parse_amount(value) -> float:
@@ -364,12 +386,25 @@ def file_wait(now: datetime, expect_at: str, last_success: str | None, has_file:
     return "mancante"
 
 
-def badge_gestionale(when: datetime) -> str:
-    return f"aggiornato dal gestionale il {when.strftime('%d/%m/%Y')} alle {when.strftime('%H:%M')}"
+def badge_gestionale(when: datetime, lingua: str = "it") -> str:
+    import frasi
+    return frasi.traduci(
+        "aggiornato dal gestionale il {data} alle {ora}",
+        lingua,
+        data=when.strftime("%d/%m/%Y"),
+        ora=when.strftime("%H:%M"),
+    )
 
 
-def badge_persona(name: str, when: datetime) -> str:
-    return f"ultimo ritocco di {name} il {when.strftime('%d/%m/%Y')} alle {when.strftime('%H:%M')}"
+def badge_persona(name: str, when: datetime, lingua: str = "it") -> str:
+    import frasi
+    return frasi.traduci(
+        "ultimo ritocco di {nome} il {data} alle {ora}",
+        lingua,
+        nome=name,
+        data=when.strftime("%d/%m/%Y"),
+        ora=when.strftime("%H:%M"),
+    )
 
 
 def badge_decision(
@@ -451,3 +486,126 @@ def compile_visibility(rule: dict) -> list[dict]:
     if not compiled:
         raise RuntimeError("indica il team o la persona")
     return compiled
+
+
+def _fold(name: str) -> str:
+    text = str(name or "").strip().lower()
+    for src, dst in (("à", "a"), ("è", "e"), ("é", "e"), ("ì", "i"), ("ò", "o"), ("ù", "u")):
+        text = text.replace(src, dst)
+    text = text.replace(".", " ").replace("_", " ").replace("-", " ")
+    return " ".join(text.split())
+
+
+_PROPOSTE = {
+    "it": (
+        (("ragione sociale", "denominazione", "nome azienda", "nome cliente"), "name", ""),
+        (("partita iva", "p iva", "piva", "partitaiva"), "fiscale", "fiscale"),
+        (("codice fiscale",), "fiscale", "fiscale"),
+        (("email", "e mail", "mail", "posta elettronica"), "emailAddress", ""),
+        (("telefono", "tel", "cellulare"), "phoneNumber", ""),
+        (("citta", "comune", "localita"), "billingAddressCity", ""),
+        (("codice", "codice cliente", "id cliente", "codice esterno"), "identity", ""),
+    ),
+    "en": (
+        (("company name", "business name", "account name", "customer name"), "name", ""),
+        (("vat", "vat number", "tax id", "vat no"), "fiscale", "fiscale"),
+        (("email", "e mail", "mail"), "emailAddress", ""),
+        (("phone", "telephone", "mobile"), "phoneNumber", ""),
+        (("city", "town"), "billingAddressCity", ""),
+        (("code", "customer code", "external id", "account code"), "identity", ""),
+    ),
+}
+
+
+def _named(fields: list[dict] | None) -> dict[str, str]:
+    found = {}
+    for field in fields or []:
+        name = str(field.get("name") or "")
+        if name:
+            found[name] = str(field.get("label") or "")
+    return found
+
+
+def _fiscal_target(fields: list[dict] | None) -> str:
+    for field in fields or []:
+        name = str(field.get("name") or "")
+        if name and is_fiscal_field(name, str(field.get("label") or "")):
+            return name
+    return ""
+
+
+def _target(token: str, fields: list[dict] | None) -> str:
+    if token == "identity":
+        return ""
+    if token == "fiscale":
+        return _fiscal_target(fields)
+    if token in _named(fields):
+        return token
+    return ""
+
+
+def propose_column(name: str, lingua: str = "it", fields: list[dict] | None = None) -> dict:
+    folded = _fold(name)
+    table = _PROPOSTE.get(lingua if lingua in _PROPOSTE else "it", _PROPOSTE["it"])
+    for aliases, token, kind in table:
+        if folded in aliases:
+            return {
+                "from": name,
+                "to": _target(token, fields),
+                "kind": kind,
+                "role": "identity" if token == "identity" else "field",
+                "known": True,
+            }
+    return {"from": name, "to": "", "kind": "", "role": "field", "known": False}
+
+
+def _cell_reading(value: str) -> str:
+    try:
+        return parse_date(value)
+    except RuntimeError:
+        return value
+
+
+def propose(
+    columns: list[str],
+    lingua: str = "it",
+    fields: list[dict] | None = None,
+    samples: list[dict] | None = None,
+) -> list[dict]:
+    rows = []
+    for name in columns:
+        row = propose_column(str(name), lingua, fields)
+        raw = ""
+        for sample in samples or []:
+            if not isinstance(sample, dict):
+                continue
+            value = str(sample.get(name) or "").strip()
+            if value:
+                raw = value
+                break
+        row["sample"] = raw
+        row["reading"] = _cell_reading(raw) if raw else ""
+        rows.append(row)
+    return rows
+
+
+def recipe_anagrafiche(fields: list[dict] | None = None) -> dict:
+    names = _named(fields)
+    fiscal = _fiscal_target(fields)
+
+    def present(name: str) -> str:
+        return name if name in names else ""
+
+    return {
+        "id": "anagrafiche",
+        "entity": "Account",
+        "externalIdField": "codice",
+        "rows": [
+            {"from": "ragione sociale", "to": present("name"), "role": "field", "kind": ""},
+            {"from": "partita iva", "to": fiscal, "role": "field", "kind": "fiscale"},
+            {"from": "email", "to": present("emailAddress"), "role": "field", "kind": ""},
+            {"from": "telefono", "to": present("phoneNumber"), "role": "field", "kind": ""},
+            {"from": "città", "to": present("billingAddressCity"), "role": "field", "kind": ""},
+        ],
+        "noteKey": "Non è un connettore certificato con un gestionale. È un abbinamento pronto da rivedere.",
+    }

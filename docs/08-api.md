@@ -1,6 +1,6 @@
 # API
 
-Base: `http://localhost:8091`. I corpi sono JSON. Gli errori di regola sono `{"error": "testo"}`.
+Base: `http://localhost:8091`. I corpi sono JSON. Gli errori di regola sono `{"error": "testo"}`. Se la richiesta manda `X-Nesso-Lang: en`, il testo dell'errore esce in inglese quando la frase è nel catalogo; altrimenti resta in italiano. Il giornale salva comunque la frase italiana.
 
 | Situazione | HTTP |
 |---|---|
@@ -11,6 +11,10 @@ Base: `http://localhost:8091`. I corpi sono JSON. Gli errori di regola sono `{"e
 | successo | 200 |
 
 Non c'è autenticazione sulle API di configurazione. Chi raggiunge la porta 8091 crea collegamenti e lancia giri. L'unico segreto è il token dentro gli URL di hook e inbox.
+
+## GET /api/frasi
+
+Catalogo inglese della pagina: `lingue` è `["it", "en"]` e `en` è la mappa dalla frase italiana a quella inglese. L'italiano non sta in un secondo elenco: è la chiave.
 
 ## GET /api/health
 
@@ -227,6 +231,14 @@ Conferma la prima chiusura dei record spariti dalla sorgente e li chiude. Senza 
 ## POST /api/connections/{id}/campione
 
 Le prime tre righe del CSV o del database, per l'abbinamento.
+
+## POST /api/proponi
+
+Corpo `columns`, `fields` (nome e etichetta dei campi della scheda) e `samples`. Non scrive l'integrazione. Ogni riga ha `from`, `to`, `known`, `role` (`field` o `identity`), `sample` e `reading`. La lingua è quella dell'intestazione. `identity` è la colonna da usare come chiave esterna, non un campo. Una data riconosciuta in `reading` è `AAAA-MM-GG`.
+
+## POST /api/ricette/anagrafiche
+
+Corpo `fields` della scheda Account. Risponde con `id` `anagrafiche`, `entity` `Account`, `externalIdField` `codice`, le righe dell'abbinamento e `noteKey`. Non crea l'integrazione: la pagina applica le righe e la persona le può ancora cambiare.
 
 ## POST /api/watch/{id}
 

@@ -38,6 +38,38 @@ markdown_extensions:
 
 plugins:
   - search
+  - i18n:
+      docs_structure: folder
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: it
+          default: true
+          name: Italiano
+          build: true
+        - locale: en
+          name: English
+          build: true
+          site_description: Manual of Nesso, the link between EspoCRM and an external system.
+          nav_translations:
+            Manuale: Manual
+            Progetto: Project
+            Prodotto: Product
+            Architettura: Architecture
+            Modello dati: Data model
+            Ingresso in Espo: Into Espo
+            Uscita da Espo: Out of Espo
+            Quattro canali: Four channels
+            Catalogo Espo: Espo catalog
+            API: API
+            Interfaccia: Interface
+            Stato della prova: Trial snapshot
+            Esercizio: Running it
+            Token GitHub: GitHub token
+            Demo Meridia: Meridia demo
+            Marchio: Brand
+            Adozione: Adoption
 
 exclude_docs: |
   README.md
