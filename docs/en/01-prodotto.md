@@ -103,11 +103,11 @@ Universal, here, has a precise meaning.
 2. A link mapping creates, if it is missing, the lookup toward another entity. On the way in, the external value is looked up on that entity (by external key, by name, or by another field) and the new record receives the id that was found. If there is no match, the row does not enter.
 3. The mapping is data saved in SQLite, not a function written for one customer. Adding a column means adding a row in the form.
 4. The record identity is one convention for every entity: `{integration id}:{external value}`. On standard entities the field is `cExternalKey`. On entities created from here it is `externalKey`. Two systems can point at the same entity without colliding, because the key contains the integration id.
-5. The four channels cover the way an external system usually delivers data: a call, a table, a file, a reception. None of these channels contains the name of a particular flow or master.
+5. The channels cover the way an external system usually delivers data: a call, a table, a file, a reception, and a PDF whose name contains the company key. None of these channels contains the name of a particular flow or master.
 
 ## What this version keeps fixed
 
-- There are four channel types. There is no SFTP, no Postgres, no queue, no OAuth.
+- The channel types are webhook, database, CSV, PDF on the customer and outbound HTTP. There is no SFTP, no Postgres, no queue, no OAuth.
 - The database that is read is MySQL or MariaDB, and only with SELECT.
 - The engine does not write on the source system.
 - If Espo refuses a record because a similar one exists with another key, the row is rejected, unless the integration is set to update that record.

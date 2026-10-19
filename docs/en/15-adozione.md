@@ -13,29 +13,20 @@ None of this is in the engine, except what is already archived in the Project ch
 | Finance | A bad file closes customers or creates duplicates | The preview, a VAT number already present, undoing the run |
 | Whoever installs Espo at the customer | It takes weeks and then they cannot hand it over | A recipe, a switch-on plan, a handover page |
 
-The home number, the balance, the expected file, the badge on the record, the mapping proposal and the accounts recipe are already in the engine.
+The home number, the balance, the expected file, the badge on the record, the mapping proposal, the accounts, site, contact and price-list recipes, the switch-on plan, the quiet window, the multi-company key, the handover page, the mapping sheet, the PDF on the customer, the stage proposed by the order and the export of one person are already in the engine.
 
 ## Switch on without a project
 
-- **Site and contact recipes.** The customer master is already there. What remains are the layouts ERPs already produce for sites and contacts: a ready mapping to review, not a certified connector.
-- **Several companies in the same file.** The key is company code plus customer code. A group with three legal names does not mix its customers.
-- **Switch-on plan.** First read-only on the accounts. Then writing the accounts. Then the contacts. Each step has its own preview and turns itself on only if the previous one was confirmed.
-- **Quiet window.** A calendar: do not write during the books close, an inventory, a fair. A file that arrives on those days waits.
+The site, contact and price-list recipes are in the mapping step. They do not create entities. The price list points at Espo's Product: if the entity is not there, the fields stay empty.
 
 ## Sales believes it
 
-- **The price list is Espo's Product.** Code, description, price, currency. No invented entity. The quote reads prices that already exist in Espo.
-- **The order proposes the stage.** If the ERP shows an order for that quote, Nesso proposes "closed won". The person confirms. The stage does not move on its own.
-- **The PDF with the customer code attaches itself.** A file whose name contains the company key lands on the right customer, in the right folder, visible to the right team.
+The PDF whose name contains the company key becomes a document on the customer. The order proposes the stage and the person confirms it in Activity: the stage does not move on its own.
 
 ## Whoever installs and then leaves
 
-- **Handover page.** Addresses of Nesso and of Espo, the list of integrations that are on, the owner of each field, how to stop every write, what time the run starts. It is printed and left with the customer.
-- **A sheet instead of JSON.** The mapping is downloaded as a sheet the office can read, and uploaded again. JSON stays for whoever moves the configuration between trial and production.
-- **Export one person's data.** On request, a file of what Nesso wrote on that contact and that company. It is the gesture for the privacy owner. It is not the close of a record that disappeared from the source: that close keeps the history.
+The export of one person is requested from Activity. It is not the close of a record that disappeared from the source.
 
 ## Order, if the goal is adoption
 
-1. Switch-on plan, quiet window, several companies in the same file. Then the site and contact recipes.
-2. Handover page and mapping sheet.
-3. Price list, PDF on the customer, stage proposed by the order, export for privacy.
+The items of this chapter are in the engine. The technical follow-up is in [Project](00-progetto.md): login, a dedicated Espo user, an alert.

@@ -5,6 +5,8 @@ Il giro le applica. I test le verificano da sole.
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 from datetime import datetime, timedelta
 
@@ -134,10 +136,12 @@ def is_fiscal_field(name: str, label: str = "") -> bool:
     return any(token in text for token in ("partitaiva", "partita", "piva", "vat", "codicefiscale", "fiscalcode"))
 
 
-def required_columns(external_id: str, rules: list[dict]) -> list[str]:
+def required_columns(external_id: str, rules: list[dict], extras: list[str] | None = None) -> list[str]:
     columns = []
-    if external_id:
-        columns.append(external_id)
+    for name in [external_id, *(extras or [])]:
+        text = str(name or "").strip()
+        if text and text not in columns:
+            columns.append(text)
     for rule in rules:
         source = str(rule.get("from") or "")
         if rule.get("required") and source and not source.startswith("_"):
@@ -589,23 +593,403 @@ def propose(
     return rows
 
 
+def _present(fields: list[dict] | None, name: str) -> str:
+    return name if name in _named(fields) else ""
+
+
+def _field_row(source: str, target: str, kind: str = "") -> dict:
+    return {"from": source, "to": target, "role": "field", "kind": kind}
+
+
 def recipe_anagrafiche(fields: list[dict] | None = None) -> dict:
-    names = _named(fields)
     fiscal = _fiscal_target(fields)
-
-    def present(name: str) -> str:
-        return name if name in names else ""
-
     return {
         "id": "anagrafiche",
         "entity": "Account",
         "externalIdField": "codice",
         "rows": [
-            {"from": "ragione sociale", "to": present("name"), "role": "field", "kind": ""},
-            {"from": "partita iva", "to": fiscal, "role": "field", "kind": "fiscale"},
-            {"from": "email", "to": present("emailAddress"), "role": "field", "kind": ""},
-            {"from": "telefono", "to": present("phoneNumber"), "role": "field", "kind": ""},
-            {"from": "città", "to": present("billingAddressCity"), "role": "field", "kind": ""},
+            _field_row("ragione sociale", _present(fields, "name")),
+            _field_row("partita iva", fiscal, "fiscale"),
+            _field_row("email", _present(fields, "emailAddress")),
+            _field_row("telefono", _present(fields, "phoneNumber")),
+            _field_row("città", _present(fields, "billingAddressCity")),
         ],
         "noteKey": "Non è un connettore certificato con un gestionale. È un abbinamento pronto da rivedere.",
     }
+
+
+def recipe_contatti(fields: list[dict] | None = None) -> dict:
+    return {
+        "id": "contatti",
+        "entity": "Contact",
+        "externalIdField": "codice",
+        "rows": [
+            _field_row("nome", _present(fields, "firstName")),
+            _field_row("cognome", _present(fields, "lastName")),
+            _field_row("email", _present(fields, "emailAddress")),
+            _field_row("telefono", _present(fields, "phoneNumber")),
+            {
+                "from": "azienda",
+                "to": "Account",
+                "role": "link",
+                "kind": "",
+                "lookupEntity": "Account",
+                "lookupBy": "name",
+                "onMiss": "fail",
+            },
+        ],
+        "noteKey": "Il contatto si lega all'azienda per nome. Se il file ha il codice cliente, cambia il campo di ricerca. Non è un connettore certificato.",
+    }
+
+
+def recipe_sedi(fields: list[dict] | None = None) -> dict:
+    return {
+        "id": "sedi",
+        "entity": "Account",
+        "externalIdField": "codice",
+        "rows": [
+            _field_row("indirizzo", _present(fields, "shippingAddressStreet")),
+            _field_row("cap", _present(fields, "shippingAddressPostalCode")),
+            _field_row("città", _present(fields, "shippingAddressCity")),
+            _field_row("provincia", _present(fields, "shippingAddressState")),
+            _field_row("nazione", _present(fields, "shippingAddressCountry")),
+        ],
+        "noteKey": "Una sede per azienda, sull'indirizzo di spedizione. Non è un'anagrafica di più sedi, e non è un connettore certificato.",
+    }
+
+
+def recipe_listino(fields: list[dict] | None = None) -> dict:
+    price = _present(fields, "unitPrice") or _present(fields, "listPrice")
+    currency = _present(fields, "unitPriceCurrency") or _present(fields, "listPriceCurrency")
+    return {
+        "id": "listino",
+        "entity": "Product",
+        "externalIdField": "codice",
+        "rows": [
+            _field_row("descrizione", _present(fields, "name")),
+            _field_row("codice", _present(fields, "partNumber")),
+            _field_row("prezzo", price),
+            _field_row("valuta", currency),
+        ],
+        "noteKey": "Il listino scrive il Product di Espo, se la scheda c'è già. Non crea una scheda. Non è un connettore certificato.",
+    }
+
+
+def listino_payload(row: dict) -> dict:
+    """La riga del listino diventa campi di Product. Non nomina una scheda nuova."""
+    return {
+        "entity": "Product",
+        "name": str(row.get("descrizione") or row.get("name") or "").strip(),
+        "partNumber": str(row.get("codice") or "").strip(),
+        "unitPrice": row.get("prezzo"),
+        "unitPriceCurrency": str(row.get("valuta") or "").strip(),
+    }
+
+
+def _bounded(text: str, token: str) -> bool:
+    start = 0
+    while True:
+        at = text.find(token, start)
+        if at < 0:
+            return False
+        before = text[at - 1] if at else ""
+        after_at = at + len(token)
+        after = text[after_at] if after_at < len(text) else ""
+        if not before.isalnum() and not after.isalnum():
+            return True
+        start = at + 1
+
+
+def match_pdf(filename: str, keys: list[str] | None) -> str:
+    """La chiave deve stare nel nome come parola intera. Fra due chiavi vince la più lunga."""
+    name = str(filename or "").replace("\\", "/").split("/")[-1]
+    best = ""
+    for key in keys or []:
+        token = str(key or "").strip()
+        if len(token) < 3 or len(token) <= len(best):
+            continue
+        if _bounded(name, token):
+            best = token
+    return best
+
+
+def stage_proposal(current: str, proposed: str) -> str:
+    """Restituisce il valore da proporre. Se è già quello, non c'è nulla da confermare."""
+    incoming = str(proposed or "").strip()
+    if not incoming or str(current or "").strip() == incoming:
+        return ""
+    return incoming
+
+
+def privacy_export(rows: list[dict] | None, contact: str, company: str) -> list[dict]:
+    """Ciò che Nesso ha scritto su quel contatto e su quell'azienda. Non toglie righe."""
+    wanted = {str(contact or "").strip(), str(company or "").strip()}
+    wanted.discard("")
+    if not wanted:
+        return []
+    exported = []
+    for row in rows or []:
+        field = str(row.get("field") or "")
+        if "password" in field.lower():
+            continue
+        ident = {str(row.get("external_key") or ""), str(row.get("espo_id") or "")}
+        if not (wanted & ident):
+            continue
+        exported.append({
+            "at": row.get("at") or "",
+            "entity": row.get("entity") or "",
+            "key": row.get("external_key") or "",
+            "field": field,
+            "value": "" if row.get("value") is None else str(row.get("value")),
+        })
+    return exported
+
+
+def is_field_rule(rule: dict) -> bool:
+    transform = str(rule.get("transform") or "copy")
+    if transform in ("lookup", "lookups", "file"):
+        return False
+    if rule.get("parentType") or rule.get("role") in ("link", "links", "parent", "visibility"):
+        return False
+    if str(rule.get("to") or "") == "parentId":
+        return False
+    return True
+
+
+_SHEET = {
+    "it": ("Integrazione", "Colonna", "Campo", "Trasformazione", "Padrone", "Obbligatorio"),
+    "en": ("Integration", "Column", "Field", "Transform", "Owner", "Required"),
+}
+_SHEET_KEY = ("pipeline", "from", "to", "transform", "owner", "required")
+_TRANSFORMS = ("copy", "split_first", "split_last", "map", "const")
+
+
+def sheet_csv(pipelines: list[dict], lingua: str = "it") -> str:
+    chosen = "en" if lingua == "en" else "it"
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=";", lineterminator="\n")
+    writer.writerow(_SHEET[chosen])
+    yes = "yes" if chosen == "en" else "si"
+    no = "no"
+    for item in pipelines or []:
+        if item.get("direction") not in (None, "in"):
+            continue
+        for rule in item.get("mapping") or []:
+            if not is_field_rule(rule):
+                continue
+            writer.writerow([
+                item.get("id") or "",
+                rule.get("from") or "",
+                rule.get("to") or "",
+                rule.get("transform") or "copy",
+                rule.get("owner") or "sorgente",
+                yes if rule.get("required") else no,
+            ])
+    return "\ufeff" + buffer.getvalue()
+
+
+def _sheet_index(header: list[str]) -> dict[str, int]:
+    cells = [cell.strip() for cell in header]
+    for labels in _SHEET.values():
+        if cells[: len(labels)] == list(labels):
+            return {key: index for index, key in enumerate(_SHEET_KEY)}
+    raise RuntimeError("il foglio non è un abbinamento")
+
+
+def _owner_token(value: str) -> str:
+    token = str(value or "").strip().lower()
+    if token in ("", "sorgente", "source"):
+        return "sorgente"
+    if token == "espo":
+        return "espo"
+    raise RuntimeError("il padrone del campo è la sorgente oppure Espo")
+
+
+def parse_sheet(text: str) -> list[dict]:
+    raw = str(text or "").lstrip("\ufeff").strip()
+    if not raw:
+        raise RuntimeError("il foglio è vuoto")
+    rows = list(csv.reader(io.StringIO(raw), delimiter=";"))
+    if not rows:
+        raise RuntimeError("il foglio è vuoto")
+    index = _sheet_index(rows[0])
+    parsed = []
+    for cells in rows[1:]:
+        if not any(str(cell).strip() for cell in cells):
+            continue
+
+        def cell(name: str) -> str:
+            position = index[name]
+            return cells[position].strip() if position < len(cells) else ""
+
+        flag = cell("required").lower()
+        parsed.append({
+            "pipeline": cell("pipeline"),
+            "from": cell("from"),
+            "to": cell("to"),
+            "transform": cell("transform") or "copy",
+            "owner": cell("owner"),
+            "required": flag in ("si", "sì", "yes", "true", "1"),
+        })
+    if not parsed:
+        raise RuntimeError("il foglio non ha righe")
+    return parsed
+
+
+def apply_sheet(mapping: list[dict], rows: list[dict]) -> list[dict]:
+    kept = [dict(rule) for rule in mapping or [] if not is_field_rule(rule)]
+    previous = {str(rule.get("from")): rule for rule in mapping or [] if is_field_rule(rule)}
+    fields = []
+    seen: set[str] = set()
+    for row in rows:
+        source = str(row.get("from") or "").strip()
+        target = str(row.get("to") or "").strip()
+        if not source or not target:
+            continue
+        if source in seen:
+            raise RuntimeError(f"colonna ripetuta {source}")
+        seen.add(source)
+        transform = str(row.get("transform") or "copy").strip() or "copy"
+        if not (transform in _TRANSFORMS or transform.startswith("const:")):
+            raise RuntimeError("trasformazione non riconosciuta")
+        base = previous.get(source) or {}
+        if transform == "const":
+            old = str(base.get("transform") or "")
+            transform = old if old.startswith("const:") else "const:"
+        item = {
+            "from": source,
+            "to": target,
+            "transform": transform,
+            "owner": _owner_token(str(row.get("owner") or "")),
+        }
+        if transform == "map" and isinstance(base.get("valueMap"), dict):
+            item["valueMap"] = base["valueMap"]
+        if row.get("required"):
+            item["required"] = True
+        fields.append(item)
+    result = kept + fields
+    if not result:
+        raise RuntimeError("il foglio non ha abbinamenti")
+    return result
+
+
+def consegna(
+    public_base: str,
+    espo_public: str,
+    writes_enabled: bool,
+    pipelines: list[dict] | None,
+    connections: list[dict] | None,
+    windows: list[dict] | None,
+) -> dict:
+    links = {
+        item.get("id"): {"name": item.get("name") or "", "kind": item.get("kind") or ""}
+        for item in connections or []
+    }
+    integrations = []
+    for item in pipelines or []:
+        owners = []
+        for rule in item.get("mapping") or []:
+            if not is_field_rule(rule):
+                continue
+            owners.append({
+                "from": rule.get("from") or "",
+                "to": rule.get("to") or "",
+                "owner": rule.get("owner") or "sorgente",
+            })
+        link = links.get(item.get("connection_id")) or {}
+        integrations.append({
+            "name": item.get("name") or item.get("id") or "",
+            "entity": item.get("espo_entity") or "",
+            "direction": item.get("direction") or "in",
+            "enabled": item.get("enabled") not in (0, False, "0"),
+            "scheduleAt": item.get("schedule_at") or "",
+            "scheduleMinutes": int(item.get("schedule_minutes") or 0),
+            "connection": link.get("name") or "",
+            "readOnly": bool(item.get("read_only")),
+            "owners": owners,
+        })
+    silence = []
+    for window in windows or []:
+        silence.append({
+            "start": window.get("start_on") or window.get("start") or "",
+            "end": window.get("end_on") or window.get("end") or "",
+            "reason": window.get("reason") or "",
+            "pipelineId": window.get("pipeline_id") or "",
+        })
+    return {
+        "nesso": str(public_base or ""),
+        "espo": str(espo_public or ""),
+        "writesEnabled": bool(writes_enabled),
+        "integrations": integrations,
+        "silence": silence,
+    }
+
+
+def parse_day(value: str) -> str:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        raise RuntimeError("il giorno è nel formato 2026-10-19")
+    datetime.strptime(text, "%Y-%m-%d")
+    return text
+
+
+def silence_decision(day: str, windows: list[dict] | None, held: bool) -> dict:
+    """Senza finestre e senza un file fermo, l'azione è scrivere."""
+    today = str(day or "")[:10]
+    for window in windows or []:
+        start = str(window.get("start") or "")
+        end = str(window.get("end") or "")
+        if start and end and start <= today <= end:
+            return {"action": "attesa", "reason": str(window.get("reason") or "")}
+    if held:
+        return {"action": "fermo", "reason": "la finestra è finita e il file è in attesa"}
+    return {"action": "scrivi", "reason": ""}
+
+
+def step_may_enable(in_plan: bool, position: int, previous_confirmed: bool) -> tuple[bool, str]:
+    if not in_plan or int(position or 1) <= 1:
+        return True, ""
+    if previous_confirmed:
+        return True, ""
+    return False, "il gradino precedente non è stato confermato"
+
+
+def compose_identity(payload: dict, columns: list[str]) -> str:
+    """Una colonna restituisce la cella, senza separatore. Due o più si uniscono con |."""
+    names = [str(name).strip() for name in columns if str(name).strip()]
+    if len(names) <= 1:
+        name = names[0] if names else ""
+        return str(payload.get(name) or "").strip()
+    parts = []
+    for name in names:
+        value = str(payload.get(name) or "").strip()
+        if not value:
+            raise RuntimeError(f"manca il campo {name}")
+        if "|" in value:
+            raise RuntimeError(f"campo {name}: il valore non può contenere |")
+        parts.append(value)
+    return "|".join(parts)
+
+
+def identity_preview(rows: list[dict], columns: list[str], limit: int = 3) -> list[str]:
+    shown = []
+    for row in rows:
+        if len(shown) >= limit:
+            break
+        if not isinstance(row, dict):
+            continue
+        try:
+            value = compose_identity(row, columns)
+        except RuntimeError:
+            continue
+        if value:
+            shown.append(value)
+    return shown
+
+
+def step_may_confirm(in_plan: bool, previewed: bool) -> tuple[bool, str]:
+    if not in_plan:
+        return False, "questa integrazione non è in un piano"
+    if not previewed:
+        return False, "prima va vista l'anteprima"
+    return True, ""

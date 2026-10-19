@@ -65,6 +65,22 @@ Field owner, with clearing only on source-owned fields and a queue if the owner 
 
 The page speaks Italian or English. The choice is in the menu, key `nesso-lang`. The composed sentences of home have a key, so the same percent is read in the chosen language. The manual is in Italian and in English. A journal row already written is not rewritten. Nesso origin uses the language of the run; the scheduler writes in Italian. In the mapping step, "Propose the mapping" reads the column names and does not save until the person confirms. "Accounts recipe" prepares Account with the fields a customer export already has, and says it is not a certified connector. The synonyms are a list per language. The tests are in `motore/test_frasi.py`.
 
+### Group key, 19 October 2026
+
+The key can be several columns. The group case is company code plus customer code: in the queue it becomes `MI|C001`. Two companies with the same customer code stay two companies, and the same pair sent again updates. One column does not change: the cell stays the key, even if it contains `|`. The tests are in the class `ChiaveComposta` and in the runs `due societa` and `una colonna`.
+
+### Handover, 19 October 2026
+
+"Contacts recipe" prepares Contact: code, first name, last name, email, phone, and the company looked up by name. "Sites recipe" prepares the shipping address on Account, one site per company. Neither creates an entity. The handover page, `#/consegna`, lists addresses, integrations, schedule, the owner of each field and how to stop writes, and it contains no passwords and no tokens. The mapping sheet is downloaded and uploaded: column, field, transform, owner, required. A link stays where it is. JSON stays the configuration download. The tests are in the classes `RicetteSediEContatti`, `FoglioAbbinamento` and `PaginaConsegna`.
+
+### Price list, PDF, stage, privacy, 19 October 2026
+
+"Price list recipe" prepares Espo's Product: code, description, price, currency. It does not create the entity. In this trial Product is not there, and the fields stay empty until the entity is already in Espo. A PDF connection drops files in `scambio/{id}`: if the name contains the company key, the file becomes a Document on the customer, in the named folder and team, and moves to `elaborati/`. A name without that key stays where it is. An order can propose an offer's stage: the stage does not change until it is confirmed in Activity. The export of one person downloads what Nesso wrote about that contact and that company, skips password fields, and does not close or delete. The tests are in the class `ListinoPdfFasePrivacy` and in the runs `il pdf`, `l'ordine` and `l'export`.
+
+### Switch-on, 19 October 2026
+
+A plan orders integrations that are already saved. The next step can be turned back on only if the previous one was confirmed after its preview, and it does not turn on by itself. An integration outside the plan is paused and resumed as before. A quiet window, for one integration or for all of them, does not write on those days: the file stays where it is. When the window ends it does not start on its own: you confirm it, and then it writes, or you discard it into `scartati/` without touching Espo. With no windows and no plan the run is the one from before. The tests are in the class `FinestraEPiano` and in the runs `la finestra`, `dopo la finestra`, `scartare`, `il piano`.
+
 ### Morning, 19 October 2026
 
 On home, the percent of accounts in sync and the time of the last successful run on the integration toward Account. A run already marked `ok`, with unchanged rows, counts even if it ran before the last-success field existed. If today's run fails, the percent is not shown and yesterday's time is not presented as today. A balance between keys in the source and keys already in Espo, with the amount gap if there is a currency or decimal field: it is a check, it does not write. For a file, a time by which it is expected: past that moment without a successful run, home is red, and a file already in `elaborati/` is not read again. On the Espo record, the Nesso origin field says whether the last update is from the ERP or from a person. The tests of the four functions are in the classes `Mattina`, `QuadraturaNumeri`, `FileAtteso` and `Badge`.
@@ -104,7 +120,6 @@ An item stays here until it is in the engine. Those already closed are not repea
 
 ### Data and visibility
 
-- A key of several columns. Today the page has one.
 - Several parents: "companies and sites first, then the address book". Today only one is named.
 - A retry queue with growing wait, for a silent outbound and for the row whose parent has not arrived yet.
 - Outbound, the link leaves as an external key, not as an Espo id.

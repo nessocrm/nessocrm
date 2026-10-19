@@ -13,29 +13,20 @@ Niente di questo è nel motore, salvo ciò che è già archiviato nel capitolo P
 | Amministrazione | Un file storto chiude clienti o ne crea doppi | L'anteprima, la partita IVA già presente, l'annullamento del giro |
 | Chi installa Espo dal cliente | Ci mette settimane e poi non sa consegnare | Una ricetta, un piano di accensione, una pagina di consegna |
 
-Il numero in home, la quadratura, il file atteso, il badge sul record, la proposta di abbinamento e la ricetta di anagrafiche sono già nel motore.
+Il numero in home, la quadratura, il file atteso, il badge sul record, la proposta di abbinamento, le ricette di anagrafiche, sedi, contatti e listino, il piano di accensione, la finestra di silenzio, la chiave di più società, la pagina di consegna, il foglio di abbinamento, il PDF sul cliente, la fase proposta dall'ordine e l'export di una persona sono già nel motore.
 
 ## Accendere senza un progetto
 
-- **Ricette di sedi e contatti.** L'anagrafica clienti c'è già. Restano i layout che i gestionali producono per sedi e contatti: un abbinamento pronto da rivedere, non un connettore certificato.
-- **Più società nello stesso file.** La chiave è codice società più codice cliente. Un gruppo con tre ragioni sociali non mescola i clienti.
-- **Piano di accensione.** Prima solo lettura sulle anagrafiche. Poi scrittura delle anagrafiche. Poi i contatti. Ogni gradino ha la sua anteprima e si accende da solo solo se il precedente è stato confermato.
-- **Finestra di silenzio.** Un calendario: non scrivere durante la chiusura contabile, un inventario, una fiera. Il file che arriva in quei giorni resta in attesa.
+Le ricette di sedi, contatti e listino sono nel passo di abbinamento. Non creano schede. Il listino punta al Product di Espo: se la scheda non c'è, i campi restano vuoti.
 
 ## Il commerciale ci crede
 
-- **Il listino è il Product di Espo.** Codice, descrizione, prezzo, valuta. Nessuna scheda inventata. L'offerta legge prezzi che esistono già in Espo.
-- **L'ordine propone la fase.** Se nel gestionale compare un ordine per quell'offerta, Nesso propone «chiusa vinta». La persona conferma. La fase non scatta da sola.
-- **Il PDF col codice cliente si attacca da solo.** Un file il cui nome contiene la chiave dell'azienda finisce sul cliente giusto, nella cartella giusta, visibile al team giusto.
+Il PDF il cui nome contiene la chiave dell'azienda diventa un documento sul cliente. L'ordine propone la fase e la persona la conferma in Attività: la fase non scatta da sola.
 
 ## Chi installa e poi se ne va
 
-- **Pagina di consegna.** Indirizzi di Nesso e di Espo, elenco delle integrazioni accese, padrone di ogni campo, come si ferma ogni scrittura, a che ora parte il giro. Si stampa e si lascia al cliente.
-- **Foglio al posto del JSON.** L'abbinamento si scarica in un foglio che l'amministrazione sa leggere e si ricarica. Il JSON resta per chi sposta la configurazione fra prova e esercizio.
-- **Esporta i dati di una persona.** Su richiesta, un file con ciò che Nesso ha scritto su quel contatto e su quell'azienda. È il gesto per il responsabile della privacy. Non è la chiusura del record sparito dalla sorgente: quella lascia lo storico.
+L'export di una persona si chiede da Attività. Non è la chiusura del record sparito dalla sorgente.
 
 ## In che ordine, se l'obiettivo è l'adozione
 
-1. Piano di accensione, finestra di silenzio, più società nello stesso file. Poi le ricette di sedi e contatti.
-2. Pagina di consegna e foglio di abbinamento.
-3. Listino, PDF sul cliente, fase proposta dall'ordine, export per la privacy.
+Le voci di questo capitolo sono nel motore. Il seguito tecnico sta in [Progetto](00-progetto.md): login, utente Espo dedicato, avviso.

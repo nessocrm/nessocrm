@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from datetime import datetime
@@ -31,6 +32,10 @@ class Giro(unittest.TestCase):
             conn.execute("DELETE FROM presenza")
             conn.execute("DELETE FROM field_history")
             conn.execute("DELETE FROM watch_item")
+            conn.execute("DELETE FROM silence_window")
+            conn.execute("DELETE FROM silence_payload")
+            conn.execute("DELETE FROM plan_step")
+            conn.execute("DELETE FROM stage_proposal")
             conn.execute("UPDATE setting SET value = '1' WHERE key = 'writes'")
 
     def test_orario_fisso_sul_giro(self):
@@ -215,6 +220,357 @@ class Giro(unittest.TestCase):
             "modifiedByName": "Admin",
         }])
         self.assertEqual(again, 0)
+
+    def _clienti_csv(self, text):
+        folder = app.SCAMBIO / "coda"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "clienti.csv").write_text(text, encoding="utf-8")
+        with app.connect() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, name, kind, config_json, token) VALUES ('coda', 'File', 'csv', '{}', 'tok')"
+            )
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, enabled)
+                VALUES ('clienti', 'Clienti', 'in', 'Account', 'codice', 'clienti:{codice}', ?, 'cExternalKey', 'coda', 1)
+                """,
+                ('[{"from":"codice","to":"name","transform":"copy","owner":"sorgente"}]',),
+            )
+        return folder
+
+    def test_la_finestra_non_tocca_il_file_e_non_chiama_espo(self):
+        calls = []
+        app.espo_request = lambda *args, **kwargs: calls.append(args) or (201, {"id": "x"})
+        folder = self._clienti_csv("codice;nome\n1;Nord\n")
+        app.save_silence({"start": "2026-10-01", "end": "2026-12-31", "reason": "inventario", "pipelineId": "clienti"})
+        result = app.run_pipeline("clienti")
+        self.assertEqual(result["silence"], "attesa")
+        self.assertTrue((folder / "clienti.csv").is_file())
+        self.assertEqual(list((folder / "elaborati").glob("*.csv")), [])
+        self.assertEqual(calls, [])
+        with app.connect() as conn:
+            held = conn.execute("SELECT silence_held FROM pipeline WHERE id = 'clienti'").fetchone()["silence_held"]
+        self.assertEqual(held, 1)
+
+    def test_dopo_la_finestra_il_file_resta_fermo(self):
+        calls = []
+        app.espo_request = lambda *args, **kwargs: calls.append(args) or (201, {"id": "x"})
+        folder = self._clienti_csv("codice;nome\n1;Nord\n")
+        with app.connect() as conn:
+            conn.execute("UPDATE pipeline SET silence_held = 1 WHERE id = 'clienti'")
+        result = app.run_pipeline("clienti")
+        self.assertEqual(result["silence"], "fermo")
+        self.assertTrue((folder / "clienti.csv").is_file())
+        self.assertEqual(calls, [])
+
+    def test_scartare_il_file_non_scrive(self):
+        calls = []
+        app.espo_request = lambda *args, **kwargs: calls.append(args) or (201, {"id": "x"})
+        folder = self._clienti_csv("codice;nome\n1;Nord\n")
+        with app.connect() as conn:
+            conn.execute("UPDATE pipeline SET silence_held = 1 WHERE id = 'clienti'")
+        result = app.discard_silence("clienti")
+        self.assertEqual(result["discarded"], 1)
+        self.assertFalse((folder / "clienti.csv").is_file())
+        self.assertEqual(len(list((folder / "scartati").glob("*.csv"))), 1)
+        self.assertEqual(calls, [])
+        with app.connect() as conn:
+            held = conn.execute("SELECT silence_held FROM pipeline WHERE id = 'clienti'").fetchone()["silence_held"]
+        self.assertEqual(held, 0)
+
+    def test_il_piano_non_accende_il_gradino_dopo(self):
+        with app.connect() as conn:
+            for pipeline_id, name, enabled in (("anagrafiche", "Anagrafiche", 0), ("contatti", "Contatti", 0)):
+                conn.execute(
+                    """
+                    INSERT INTO pipeline
+                    (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, enabled)
+                    VALUES (?, ?, 'in', 'Account', 'codice', ?, '[]', 'cExternalKey', ?)
+                    """,
+                    (pipeline_id, name, pipeline_id + ":{codice}", enabled),
+                )
+        app.save_plan({"steps": ["anagrafiche", "contatti"]})
+        with self.assertRaises(RuntimeError):
+            app.set_enabled("contatti", True)
+        with app.connect() as conn:
+            enabled = conn.execute("SELECT enabled FROM pipeline WHERE id = 'contatti'").fetchone()["enabled"]
+        self.assertEqual(enabled, 0)
+        app.anteprima("anagrafiche")
+        confirmed = app.confirm_step("anagrafiche")
+        self.assertTrue(confirmed["confirmed"])
+        self.assertFalse(confirmed["nextEnabled"])
+        app.set_enabled("contatti", True)
+        with app.connect() as conn:
+            enabled = conn.execute("SELECT enabled FROM pipeline WHERE id = 'contatti'").fetchone()["enabled"]
+            first = conn.execute("SELECT enabled FROM pipeline WHERE id = 'anagrafiche'").fetchone()["enabled"]
+        self.assertEqual(enabled, 1)
+        self.assertEqual(first, 0)
+
+    def test_il_webhook_in_finestra_non_scrive(self):
+        calls = []
+        app.espo_request = lambda *args, **kwargs: calls.append(args) or (201, {"id": "x"})
+        with app.connect() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, name, kind, config_json, token) VALUES ('gancio', 'Gancio', 'webhook', '{}', 'tok')"
+            )
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, enabled)
+                VALUES ('gancio', 'Gancio', 'in', 'Account', 'codice', 'gancio:{codice}', ?, 'cExternalKey', 'gancio', 1)
+                """,
+                ('[{"from":"codice","to":"name","transform":"copy","owner":"sorgente"}]',),
+            )
+        app.save_silence({"start": "2026-10-01", "end": "2026-12-31", "reason": "fiera"})
+        result = app.accept_hook("gancio", "tok", {"codice": "1", "nome": "Nord"})
+        self.assertEqual(result["results"][0]["status"], "attesa")
+        self.assertEqual(calls, [])
+
+    def test_senza_finestra_il_giro_arriva_al_file(self):
+        folder = self._clienti_csv("nome;citta\nNord;Treviso\n")
+        result = app.run_pipeline("clienti")
+        self.assertEqual(result["failed"], 1)
+        self.assertNotIn("silence", result)
+        self.assertTrue((folder / "clienti.csv").is_file())
+
+    def test_due_societa_aggiornano_e_non_duplicano(self):
+        saved = (app.espo_request, app.scope_customizable, app.scope_is_custom, app.publish_field_name)
+        calls = []
+
+        def fake(method, path, body=None, query=None):
+            calls.append(method)
+            if method == "POST":
+                return 201, {"id": "esp-" + str(len(calls))}
+            name = path.rstrip("/").rsplit("/", 1)[-1]
+            return 200, {"id": name}
+
+        app.espo_request = fake
+        app.scope_customizable = lambda entity: False
+        app.scope_is_custom = lambda entity: False
+        app.publish_field_name = lambda entity, name: "cNessoBadge"
+        try:
+            with app.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO pipeline
+                    (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, key_columns, enabled)
+                    VALUES ('gruppo', 'Gruppo', 'in', 'Account', 'societa', 'gruppo:{societa}|{codice}', ?, 'cExternalKey', ?, 1)
+                    """,
+                    (
+                        '[{"from":"ragione","to":"name","transform":"copy","owner":"sorgente"}]',
+                        '["societa","codice"]',
+                    ),
+                )
+            nord = app.ingest("gruppo", {"societa": "MI", "codice": "C001", "ragione": "Nord"})
+            sud = app.ingest("gruppo", {"societa": "TO", "codice": "C001", "ragione": "Sud"})
+            again = app.ingest("gruppo", {"societa": "MI", "codice": "C001", "ragione": "Nord due"})
+            self.assertEqual(nord["status"], "creato")
+            self.assertEqual(sud["status"], "creato")
+            self.assertNotEqual(nord["espoId"], sud["espoId"])
+            self.assertEqual(again["status"], "aggiornato")
+            self.assertEqual(again["espoId"], nord["espoId"])
+            with app.connect() as conn:
+                stored = [row["external_id"] for row in conn.execute("SELECT external_id FROM queue_item WHERE pipeline_id = 'gruppo' ORDER BY external_id")]
+            self.assertEqual(stored, ["MI|C001", "TO|C001"])
+        finally:
+            app.espo_request, app.scope_customizable, app.scope_is_custom, app.publish_field_name = saved
+
+    def test_una_colonna_non_cambia_la_chiave(self):
+        saved = (app.espo_request, app.scope_customizable, app.scope_is_custom, app.publish_field_name)
+        app.espo_request = lambda method, path, body=None, query=None: (201, {"id": "esp-1"}) if method == "POST" else (200, {"id": "esp-1"})
+        app.scope_customizable = lambda entity: False
+        app.scope_is_custom = lambda entity: False
+        app.publish_field_name = lambda entity, name: "cNessoBadge"
+        try:
+            with app.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO pipeline
+                    (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, enabled)
+                    VALUES ('solo', 'Solo', 'in', 'Account', 'codice', 'solo:{codice}', ?, 'cExternalKey', 1)
+                    """,
+                    ('[{"from":"nome","to":"name","transform":"copy","owner":"sorgente"}]',),
+                )
+            item = app.ingest("solo", {"codice": "C001", "nome": "Nord"})
+            self.assertEqual(item["externalKey"], "solo:C001")
+            with app.connect() as conn:
+                stored = conn.execute("SELECT external_id FROM queue_item WHERE pipeline_id = 'solo'").fetchone()["external_id"]
+            self.assertEqual(stored, "C001")
+        finally:
+            app.espo_request, app.scope_customizable, app.scope_is_custom, app.publish_field_name = saved
+
+    def test_il_foglio_cambia_il_padrone_e_lascia_il_legame(self):
+        mapping = [
+            {"from": "nome", "to": "name", "transform": "copy", "owner": "sorgente"},
+            {"from": "azienda", "to": "accountId", "transform": "lookup", "lookupEntity": "Account", "lookupBy": "name", "onMiss": "fail"},
+            {"from": "tipo", "to": "type", "transform": "map", "owner": "sorgente", "valueMap": {"A": "Cliente"}},
+        ]
+        other = [{"from": "nome", "to": "name", "transform": "copy", "owner": "sorgente"}]
+        with app.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field)
+                VALUES ('clienti', 'Clienti', 'in', 'Account', 'codice', 'clienti:{codice}', ?, 'cExternalKey')
+                """,
+                (json.dumps(mapping),),
+            )
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field)
+                VALUES ('altra', 'Altra', 'in', 'Account', 'codice', 'altra:{codice}', ?, 'cExternalKey')
+                """,
+                (json.dumps(other),),
+            )
+        text = (
+            "Integrazione;Colonna;Campo;Trasformazione;Padrone;Obbligatorio\n"
+            "clienti;nome;name;copy;espo;si\n"
+            "clienti;tipo;type;map;sorgente;no\n"
+        )
+        result = app.import_sheet(text)
+        self.assertEqual(result["pipelines"], 1)
+        with app.connect() as conn:
+            stored = json.loads(conn.execute("SELECT mapping_json FROM pipeline WHERE id = 'clienti'").fetchone()["mapping_json"])
+            untouched = json.loads(conn.execute("SELECT mapping_json FROM pipeline WHERE id = 'altra'").fetchone()["mapping_json"])
+        by_from = {row["from"]: row for row in stored}
+        self.assertEqual(by_from["nome"]["owner"], "espo")
+        self.assertTrue(by_from["nome"]["required"])
+        self.assertEqual(by_from["azienda"]["transform"], "lookup")
+        self.assertEqual(by_from["tipo"]["valueMap"]["A"], "Cliente")
+        self.assertEqual(untouched[0]["owner"], "sorgente")
+
+    def test_fuori_dal_piano_la_pausa_si_toglie(self):
+        with app.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, enabled)
+                VALUES ('libera', 'Libera', 'in', 'Account', 'codice', 'libera:{codice}', '[]', 'cExternalKey', 0)
+                """
+            )
+        result = app.set_enabled("libera", True)
+        self.assertTrue(result["enabled"])
+
+    def test_il_pdf_senza_chiave_resta_e_quello_giusto_si_attacca(self):
+        folder = app.SCAMBIO / "pdfs"
+        folder.mkdir(parents=True)
+        (folder / "fattura-C001.pdf").write_bytes(b"%PDF-1.4")
+        (folder / "senza.pdf").write_bytes(b"%PDF-1.4")
+        calls = []
+
+        def fake(method, path, body=None, query=None):
+            calls.append((method, path, body))
+            if str(path).endswith("Attachment"):
+                return 201, {"id": "att"}
+            if str(path).endswith("Document"):
+                return 201, {"id": "doc"}
+            return 200, {}
+
+        saved = app.espo_request
+        app.espo_request = fake
+        try:
+            with app.connect() as conn:
+                conn.execute(
+                    "INSERT INTO connection (id, name, kind, config_json, token) VALUES ('pdfs', 'PDF', 'pdf', '{}', 'tok')"
+                )
+                conn.execute(
+                    """
+                    INSERT INTO pipeline
+                    (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id)
+                    VALUES ('documenti', 'Documenti', 'in', 'Document', 'nome', 'documenti:{nome}', '[]', 'cExternalKey', 'pdfs')
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO chiave (entity, external_key, espo_id) VALUES ('Account', 'anagrafiche:C001', 'acc-1')"
+                )
+            result = app.execute_pipeline("documenti")
+            self.assertEqual(result["attached"], 1)
+            self.assertEqual(result["waiting"], 1)
+            self.assertTrue((folder / "senza.pdf").is_file())
+            self.assertEqual(len(list((folder / "elaborati").glob("*.pdf"))), 1)
+            posted = [body for method, path, body in calls if method == "POST" and str(path).endswith("Document")]
+            self.assertEqual(posted[0]["accountsIds"], ["acc-1"])
+        finally:
+            app.espo_request = saved
+
+    def test_l_ordine_propone_la_fase_e_non_la_scrive(self):
+        calls = []
+
+        def fake(method, path, body=None, query=None):
+            calls.append((method, path, body))
+            if method == "GET":
+                return 200, {"id": "off-1", "stage": "Prospecting"}
+            if method == "PUT":
+                return 200, {"id": "off-1"}
+            return 201, {"id": "esp-1"}
+
+        saved = (app.espo_request, app.scope_customizable, app.scope_is_custom, app.publish_field_name)
+        app.espo_request = fake
+        app.scope_customizable = lambda entity: False
+        app.scope_is_custom = lambda entity: False
+        app.publish_field_name = lambda entity, name: "cNessoBadge"
+        try:
+            with app.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO pipeline
+                    (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, enabled, propose_from, propose_entity, propose_field, propose_value)
+                    VALUES ('ordini', 'Ordini', 'in', 'Account', 'codice', 'ordini:{codice}', ?, 'cExternalKey', 1, 'offerta', 'COfferta', 'stage', 'Closed Won')
+                    """,
+                    ('[{"from":"nome","to":"name","transform":"copy","owner":"sorgente"}]',),
+                )
+                conn.execute(
+                    "INSERT INTO chiave (entity, external_key, espo_id) VALUES ('COfferta', 'OFF-1', 'off-1')"
+                )
+            app.ingest("ordini", {"codice": "O-1", "nome": "Ordine", "offerta": "OFF-1"})
+            self.assertFalse(any(method == "PUT" for method, _path, _body in calls))
+            with app.connect() as conn:
+                proposal = conn.execute("SELECT id, proposed FROM stage_proposal").fetchone()
+            self.assertEqual(proposal["proposed"], "Closed Won")
+            app.confirm_proposal(proposal["id"])
+            puts = [body for method, path, body in calls if method == "PUT" and path.endswith("off-1")]
+            self.assertEqual(puts[0]["stage"], "Closed Won")
+            with app.connect() as conn:
+                left = conn.execute("SELECT COUNT(*) AS n FROM stage_proposal").fetchone()["n"]
+                offer = conn.execute("SELECT espo_id FROM chiave WHERE entity = 'COfferta'").fetchone()["espo_id"]
+            self.assertEqual(left, 0)
+            self.assertEqual(offer, "off-1")
+        finally:
+            app.espo_request, app.scope_customizable, app.scope_is_custom, app.publish_field_name = saved
+
+    def test_l_export_lascia_lo_storico(self):
+        with app.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field)
+                VALUES ('rubrica', 'Rubrica', 'in', 'Contact', 'codice', 'rubrica:{codice}', '[]', 'cExternalKey')
+                """
+            )
+            conn.execute(
+                "INSERT INTO presenza (pipeline_id, external_key, espo_id) VALUES ('rubrica', 'CNT-1', 'c1')"
+            )
+            conn.execute(
+                """
+                INSERT INTO field_history (pipeline_id, run_at, espo_id, field_name, previous_value, written_value)
+                VALUES ('rubrica', '2026-10-19 10:00:00', 'c1', 'emailAddress', '', 'a@b.c')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO field_history (pipeline_id, run_at, espo_id, field_name, previous_value, written_value)
+                VALUES ('rubrica', '2026-10-19 10:00:00', 'c1', 'password', '', 'segreto')
+                """
+            )
+            before = conn.execute("SELECT COUNT(*) AS n FROM field_history").fetchone()["n"]
+        result = app.privacy_for("CNT-1", "")
+        with app.connect() as conn:
+            after = conn.execute("SELECT COUNT(*) AS n FROM field_history").fetchone()["n"]
+        self.assertEqual(after, before)
+        self.assertEqual(result["kept"], before)
+        self.assertEqual([row["field"] for row in result["rows"]], ["emailAddress"])
 
 
 if __name__ == "__main__":

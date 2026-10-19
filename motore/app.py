@@ -153,6 +153,12 @@ def init_db() -> None:
             "expect_at": "TEXT",
             "file_alert": "INTEGER NOT NULL DEFAULT 0",
             "balance_json": "TEXT",
+            "silence_held": "INTEGER NOT NULL DEFAULT 0",
+            "key_columns": "TEXT",
+            "propose_from": "TEXT",
+            "propose_entity": "TEXT",
+            "propose_field": "TEXT",
+            "propose_value": "TEXT",
         }
         for name, ddl in additions.items():
             if name not in columns:
@@ -187,6 +193,26 @@ def init_db() -> None:
                 author TEXT,
                 label TEXT
             );
+            CREATE TABLE IF NOT EXISTS silence_window (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT,
+                start_on TEXT NOT NULL,
+                end_on TEXT NOT NULL,
+                reason TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS silence_payload (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS plan_step (
+                pipeline_id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                confirmed INTEGER NOT NULL DEFAULT 0,
+                previewed INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS presenza (
                 pipeline_id TEXT NOT NULL,
                 external_key TEXT NOT NULL,
@@ -197,6 +223,17 @@ def init_db() -> None:
                 pipeline_id TEXT NOT NULL,
                 external_key TEXT NOT NULL,
                 PRIMARY KEY (pipeline_id, external_key)
+            );
+            CREATE TABLE IF NOT EXISTS stage_proposal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                offer_key TEXT NOT NULL,
+                entity TEXT NOT NULL,
+                espo_id TEXT,
+                field_name TEXT NOT NULL,
+                proposed TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (pipeline_id, offer_key)
             );
             """
         )
@@ -932,6 +969,32 @@ def governed_mapped(mapping: list[dict], payload: dict, mapped: dict, current: d
     return write, watch
 
 
+def key_column_list(row) -> list[str]:
+    raw = row["key_columns"] if "key_columns" in row.keys() else None
+    columns = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = []
+        if isinstance(parsed, list):
+            for item in parsed:
+                name = str(item or "").strip()
+                if name and name not in columns:
+                    columns.append(name)
+    if len(columns) >= 2:
+        return columns
+    primary = str(row["external_id_field"] or "").strip()
+    return [primary] if primary else []
+
+
+def external_of(row, payload: dict) -> str:
+    columns = key_column_list(row)
+    if len(columns) >= 2:
+        return carico.compose_identity(payload, columns)
+    return str(payload.get(row["external_id_field"]) or "").strip()
+
+
 def ingest(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
@@ -939,7 +1002,7 @@ def ingest(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
             raise KeyError(pipeline_id)
         if row["direction"] != "in":
             raise RuntimeError("la pipeline non è in ingresso")
-        external_id = str(payload.get(row["external_id_field"]) or "").strip()
+        external_id = external_of(row, payload)
         if not external_id:
             raise RuntimeError(f"manca il campo {row['external_id_field']}")
         key = render_key(row["key_template"], payload)
@@ -972,6 +1035,11 @@ def ingest(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
         would = carico.classify_row(existing_id is not None, {k: v for k, v in write.items() if k != key_field}, None, watch)
         if previous and previous["hash"] == digest and previous["status"] == "synced" and not watch:
             would = "invariato"
+        if would == "invariato" and not hold and not writes_held(row)[0]:
+            try:
+                note_stage(row, payload)
+            except Exception:
+                pass
         diffs = carico.dangerous_diffs(watch)
         if hold or writes_held(row)[0]:
             return {
@@ -1040,6 +1108,10 @@ def ingest(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
                 """,
                 (pipeline_id, external_id, json.dumps(payload, ensure_ascii=False), json.dumps(write, ensure_ascii=False), digest, espo_id, action, now),
             )
+        try:
+            note_stage(row, payload)
+        except Exception:
+            pass
         return {"status": action, "espoId": espo_id, "externalKey": key, "entity": row["espo_entity"], "diffs": diffs}
 
 
@@ -1388,7 +1460,7 @@ def registry_morning(pipelines: list[dict], now: datetime | None = None) -> dict
         if stamp and (last_success is None or stamp > last_success):
             last_success = stamp
         ran_today = str(item.get("last_run") or "")[:10] == today
-        if ran_today and item.get("last_status") not in ("ok", "lettura", "conferma", None, ""):
+        if ran_today and item.get("last_status") not in ("ok", "lettura", "conferma", "attesa", "sospeso", None, ""):
             failed_today = True
     status = "errore" if failed_today else "ok"
     return carico.morning_alignment(source, aligned, last_success, status, moment)
@@ -1405,6 +1477,12 @@ def snapshot() -> dict:
             raw_balance = item.get("balance_json")
             item["balance"] = json.loads(raw_balance) if raw_balance else None
             item["file_alert"] = int(item.get("file_alert") or 0)
+            raw_keys = item.get("key_columns")
+            try:
+                parsed_keys = json.loads(raw_keys) if raw_keys else []
+            except json.JSONDecodeError:
+                parsed_keys = []
+            item["keyColumns"] = parsed_keys if isinstance(parsed_keys, list) else []
         watch = [dict(row) for row in conn.execute("SELECT * FROM watch_item ORDER BY id DESC LIMIT 30")]
         queue = [dict(row) for row in conn.execute("SELECT * FROM queue_item ORDER BY updated_at DESC LIMIT 30")]
         sink = [dict(row) for row in conn.execute("SELECT * FROM sink_item ORDER BY id DESC LIMIT 20")]
@@ -1412,6 +1490,9 @@ def snapshot() -> dict:
         deliveries = [dict(row) for row in conn.execute("SELECT * FROM delivery ORDER BY id DESC LIMIT 20")]
         rejects = [dict(row) for row in conn.execute("SELECT * FROM scarto ORDER BY id DESC LIMIT 30")]
         runs = [dict(row) for row in conn.execute("SELECT * FROM run_log ORDER BY id DESC LIMIT 20")]
+        silence = [dict(row) for row in conn.execute("SELECT * FROM silence_window ORDER BY start_on, id")]
+        plan = [dict(row) for row in conn.execute("SELECT * FROM plan_step ORDER BY position")]
+        proposals = [dict(row) for row in conn.execute("SELECT * FROM stage_proposal ORDER BY id DESC LIMIT 30")]
     kinds = {item["id"]: item["kind"] for item in connections}
     for item in pipelines:
         if item.get("direction") == "in" and kinds.get(item.get("connection_id")) == "csv":
@@ -1427,6 +1508,12 @@ def snapshot() -> dict:
             alerts.append({
                 "text": f"{item['name']}: il file atteso non è stato elaborato.",
                 "textKey": "{nome}: il file atteso non è stato elaborato.",
+                "textParams": {"nome": item["name"]},
+            })
+        if item.get("silence_held"):
+            alerts.append({
+                "text": f"{item['name']}: un file è in attesa della finestra di silenzio.",
+                "textKey": "{nome}: un file è in attesa della finestra di silenzio.",
                 "textParams": {"nome": item["name"]},
             })
         balance = item.get("balance")
@@ -1451,6 +1538,9 @@ def snapshot() -> dict:
         "writesEnabled": setting_value("writes", "1") != "0",
         "morning": registry_morning(pipelines),
         "alerts": alerts,
+        "silence": silence,
+        "plan": plan,
+        "proposals": proposals,
     }
 
 
@@ -1894,17 +1984,55 @@ def save_pipeline(body: dict) -> dict:
                 if parent is None:
                     raise RuntimeError("l'integrazione da eseguire prima non esiste")
                 current = parent["depends_on"]
-        if direction == "in" and previous is not None and previous["external_id_field"] == external_id_field and previous["key_template"]:
+        if "keyColumns" in body and isinstance(body.get("keyColumns"), list):
+            chosen = []
+            for item in body.get("keyColumns") or []:
+                name = str(item or "").strip()
+                if name and name not in chosen:
+                    chosen.append(name)
+            if external_id_field and external_id_field not in chosen:
+                chosen.insert(0, external_id_field)
+            if len(chosen) >= 2:
+                key_columns = json.dumps(chosen, ensure_ascii=False)
+                external_id_field = chosen[0]
+            else:
+                key_columns = None
+        elif previous is not None and previous["key_columns"]:
+            key_columns = previous["key_columns"]
+        else:
+            key_columns = None
+        multi = bool(key_columns)
+        if direction == "in" and multi:
+            names = json.loads(key_columns)
+            key_template = pipeline_id + ":" + "|".join("{" + name + "}" for name in names)
+        elif direction == "in" and previous is not None and previous["external_id_field"] == external_id_field and previous["key_template"]:
             key_template = previous["key_template"]
         else:
             key_template = f"{pipeline_id}:{{{external_id_field}}}" if direction == "in" else ""
         if direction == "out":
             external_id_field = external_id_field or "id"
+        if enabled and (previous is None or not previous["enabled"]):
+            step = conn.execute(
+                "SELECT position, plan_id FROM plan_step WHERE pipeline_id = ?",
+                (pipeline_id,),
+            ).fetchone()
+            if step is not None:
+                earlier = conn.execute(
+                    "SELECT confirmed FROM plan_step WHERE plan_id = ? AND position = ?",
+                    (step["plan_id"], step["position"] - 1),
+                ).fetchone()
+                allowed, blocked = carico.step_may_enable(
+                    True,
+                    step["position"],
+                    bool(earlier and earlier["confirmed"]),
+                )
+                if not allowed:
+                    raise RuntimeError(blocked)
         conn.execute(
             """
             INSERT INTO pipeline
-            (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, schedule_minutes, depends_on, cursor_column, enabled, on_duplicate, schedule_at, close_field, close_value, expect_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, schedule_minutes, depends_on, cursor_column, enabled, on_duplicate, schedule_at, close_field, close_value, expect_at, key_columns)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 direction = excluded.direction,
@@ -1922,15 +2050,31 @@ def save_pipeline(body: dict) -> dict:
                 schedule_at = excluded.schedule_at,
                 close_field = excluded.close_field,
                 close_value = excluded.close_value,
-                expect_at = excluded.expect_at
+                expect_at = excluded.expect_at,
+                key_columns = excluded.key_columns
             """,
             (
                 pipeline_id, name, direction, entity, external_id_field, key_template,
                 json.dumps(clean, ensure_ascii=False), key_field, connection_id, schedule,
                 depends_on or None, cursor_column or None, enabled, on_duplicate,
-                schedule_at or None, close_field, close_value, expect_at or None,
+                schedule_at or None, close_field, close_value, expect_at or None, key_columns,
             ),
         )
+        if "proposeFrom" in body or "proposeEntity" in body or "proposeField" in body or "proposeValue" in body:
+            conn.execute(
+                """
+                UPDATE pipeline
+                SET propose_from = ?, propose_entity = ?, propose_field = ?, propose_value = ?
+                WHERE id = ?
+                """,
+                (
+                    str(body.get("proposeFrom") or "").strip() or None,
+                    str(body.get("proposeEntity") or "").strip() or None,
+                    str(body.get("proposeField") or "").strip() or None,
+                    str(body.get("proposeValue") or "").strip() or None,
+                    pipeline_id,
+                ),
+            )
     return {"id": pipeline_id, "name": name, "direction": direction, "espoEntity": entity}
 
 
@@ -1948,6 +2092,7 @@ def delete_pipeline(pipeline_id: str) -> dict:
         conn.execute("DELETE FROM field_history WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM presenza WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM pending_close WHERE pipeline_id = ?", (pipeline_id,))
+        conn.execute("DELETE FROM stage_proposal WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM pipeline WHERE id = ?", (pipeline_id,))
     return {"deleted": pipeline_id}
 
@@ -1968,9 +2113,9 @@ def public_connection(row: sqlite3.Row) -> dict:
         item["url"] = f"{PUBLIC_BASE}/hook/{row['id']}/{row['token']}"
     if row["kind"] == "http":
         item["inboxUrl"] = f"{PUBLIC_BASE}/inbox/{row['id']}/{row['token']}"
-    if row["kind"] == "csv":
+    if row["kind"] == "csv" or row["kind"] == "pdf":
         item["folder"] = str(SCAMBIO / row["id"])
-        config["columns"] = csv_headers(row["id"])
+        config["columns"] = csv_headers(row["id"]) if row["kind"] == "csv" else []
     return item
 
 
@@ -2063,7 +2208,10 @@ def ingest_row(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
                     (pipeline_id,),
                 ).fetchone()
             if row is not None:
-                external = str(payload.get(row["external_id_field"]) or "")
+                try:
+                    external = external_of(row, payload)
+                except Exception:
+                    external = str(payload.get(row["external_id_field"]) or "")
                 try:
                     key = render_key(row["key_template"], payload)
                 except Exception:
@@ -2121,7 +2269,7 @@ def save_connection(body: dict) -> dict:
     kind = body.get("kind")
     if not name:
         raise RuntimeError("manca il nome del collegamento")
-    if kind not in ("webhook", "database", "csv", "http"):
+    if kind not in ("webhook", "database", "csv", "http", "pdf"):
         raise RuntimeError("tipo di collegamento non riconosciuto")
     config = body.get("config") or {}
     if kind == "database":
@@ -2154,6 +2302,11 @@ def save_connection(body: dict) -> dict:
         }
     if kind == "csv":
         config = {}
+    if kind == "pdf":
+        config = {
+            "documentFolder": str(config.get("documentFolder") or "").strip(),
+            "team": str(config.get("team") or "").strip(),
+        }
     if kind == "webhook":
         config = {}
     with connect() as conn:
@@ -2363,6 +2516,15 @@ def accept_hook(connection_id: str, token: str, body: dict | list) -> dict:
     done = []
     failed = 0
     for pipeline_id in pipelines:
+        decision = silence_for(pipeline_id)
+        if decision["action"] != "scrivi":
+            for record in records:
+                if isinstance(record, dict):
+                    park_silence(pipeline_id, record, decision.get("reason") or "")
+                else:
+                    remember_reject(pipeline_id, "", {"valore": str(record)[:300]}, "la riga non è un oggetto")
+            done.append({"status": "attesa", "pipelineId": pipeline_id})
+            continue
         counts = fresh_counts()
         for record in records:
             if not isinstance(record, dict):
@@ -2407,7 +2569,7 @@ def pipeline_due(row: sqlite3.Row, now: float | None = None) -> bool:
 
 
 def preview_row(pipeline: sqlite3.Row, payload: dict) -> dict:
-    external = str(payload.get(pipeline["external_id_field"]) or "").strip()
+    external = external_of(pipeline, payload)
     if pipeline["direction"] == "in" and not external:
         raise RuntimeError(f"manca il campo {pipeline['external_id_field']}")
     key = render_key(pipeline["key_template"], payload) if pipeline["direction"] == "in" else None
@@ -2575,6 +2737,191 @@ def run_result(rows: int, counts: dict, status: str) -> dict:
     }
 
 
+def note_stage(row, payload: dict) -> None:
+    source = str(row["propose_from"] or "") if "propose_from" in row.keys() else ""
+    entity = str(row["propose_entity"] or "") if "propose_entity" in row.keys() else ""
+    field = str(row["propose_field"] or "stage") if "propose_field" in row.keys() else "stage"
+    value = str(row["propose_value"] or "") if "propose_value" in row.keys() else ""
+    offer_key = str(payload.get(source) or "").strip() if source else ""
+    if not source or not entity or not value.strip() or not offer_key:
+        return
+    espo_id = offer_espo_id(entity, offer_key)
+    current = ""
+    if espo_id:
+        code, record = espo_request("GET", f"/api/v1/{entity}/{espo_id}", query={"select": field})
+        if code == 200 and isinstance(record, dict):
+            current = record.get(field) or ""
+    proposed = carico.stage_proposal(current, value)
+    if not proposed:
+        return
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO stage_proposal
+            (pipeline_id, offer_key, entity, espo_id, field_name, proposed, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(pipeline_id, offer_key) DO UPDATE SET
+                entity = excluded.entity,
+                espo_id = excluded.espo_id,
+                field_name = excluded.field_name,
+                proposed = excluded.proposed,
+                created_at = excluded.created_at
+            """,
+            (row["id"], offer_key, entity, espo_id or "", field, proposed, now),
+        )
+
+
+def offer_espo_id(entity: str, key: str) -> str:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT external_key, espo_id FROM chiave WHERE entity = ?",
+            (entity,),
+        ).fetchall()
+    exact = [item for item in rows if item["external_key"] == key]
+    if exact:
+        return exact[0]["espo_id"]
+    suffix = [item for item in rows if str(item["external_key"]).endswith(":" + key)]
+    if len(suffix) == 1:
+        return suffix[0]["espo_id"]
+    return ""
+
+
+def confirm_proposal(proposal_id: int) -> dict:
+    with connect() as conn:
+        item = conn.execute("SELECT * FROM stage_proposal WHERE id = ?", (proposal_id,)).fetchone()
+    if item is None:
+        raise RuntimeError("proposta non trovata")
+    pipeline, _link = load_pipeline(item["pipeline_id"])
+    held, reason = writes_held(pipeline)
+    if held:
+        raise RuntimeError(reason)
+    if not item["espo_id"]:
+        raise RuntimeError("l'offerta non è ancora in Espo")
+    code, _result = espo_request(
+        "PUT",
+        f"/api/v1/{item['entity']}/{item['espo_id']}",
+        {item["field_name"]: item["proposed"]},
+    )
+    if code not in (200, 201):
+        raise RuntimeError(f"fase HTTP {code}")
+    with connect() as conn:
+        conn.execute("DELETE FROM stage_proposal WHERE id = ?", (proposal_id,))
+    return {"confirmed": True, "id": proposal_id}
+
+
+def leave_proposal(proposal_id: int) -> dict:
+    with connect() as conn:
+        found = conn.execute("SELECT id FROM stage_proposal WHERE id = ?", (proposal_id,)).fetchone()
+        if found is None:
+            raise RuntimeError("proposta non trovata")
+        conn.execute("DELETE FROM stage_proposal WHERE id = ?", (proposal_id,))
+    return {"left": True, "id": proposal_id}
+
+
+def privacy_for(contact: str, company: str) -> dict:
+    if not str(contact or "").strip() and not str(company or "").strip():
+        raise RuntimeError("indica il contatto o l'azienda")
+    with connect() as conn:
+        found = conn.execute(
+            """
+            SELECT h.run_at AS at, p.espo_entity AS entity, pr.external_key AS external_key,
+                   h.espo_id AS espo_id, h.field_name AS field, h.written_value AS value
+            FROM field_history h
+            JOIN pipeline p ON p.id = h.pipeline_id
+            LEFT JOIN presenza pr ON pr.espo_id = h.espo_id AND pr.pipeline_id = h.pipeline_id
+            """
+        ).fetchall()
+        kept = conn.execute("SELECT COUNT(*) AS n FROM field_history").fetchone()["n"]
+    rows = carico.privacy_export([dict(item) for item in found], contact, company)
+    return {"rows": rows, "kept": kept}
+
+
+def account_keys() -> list[str]:
+    found: list[str] = []
+    with connect() as conn:
+        for row in conn.execute("SELECT external_key FROM chiave WHERE entity = 'Account'"):
+            key = str(row["external_key"] or "")
+            found.append(key)
+            if ":" in key:
+                found.append(key.rsplit(":", 1)[-1])
+        for row in conn.execute(
+            """
+            SELECT q.external_id FROM queue_item q
+            JOIN pipeline p ON p.id = q.pipeline_id
+            WHERE p.espo_entity = 'Account'
+            """
+        ):
+            found.append(str(row["external_id"] or ""))
+    return found
+
+
+def account_id_for(key: str) -> str:
+    with connect() as conn:
+        exact = conn.execute(
+            "SELECT espo_id FROM chiave WHERE entity = 'Account' AND external_key = ?",
+            (key,),
+        ).fetchone()
+        if exact:
+            return exact["espo_id"]
+        rows = conn.execute(
+            "SELECT external_key, espo_id FROM chiave WHERE entity = 'Account'"
+        ).fetchall()
+    hits = [item for item in rows if str(item["external_key"]).endswith(":" + key)]
+    if len(hits) == 1:
+        return hits[0]["espo_id"]
+    return ""
+
+
+def execute_pdf(pipeline, link, held: bool) -> dict:
+    config = json.loads(link["config_json"] or "{}")
+    folder_name = str(config.get("documentFolder") or "").strip()
+    team_name = str(config.get("team") or "").strip()
+    folder = SCAMBIO / link["id"]
+    folder.mkdir(parents=True, exist_ok=True)
+    done = folder / "elaborati"
+    done.mkdir(exist_ok=True)
+    attached = 0
+    waiting = 0
+    keys = account_keys()
+    for path in sorted(folder.glob("*.pdf")):
+        matched = carico.match_pdf(path.name, keys)
+        if not matched:
+            waiting += 1
+            continue
+        if held:
+            waiting += 1
+            continue
+        account_id = account_id_for(matched)
+        if not account_id:
+            waiting += 1
+            continue
+        body = {"name": path.stem, "accountsIds": [account_id]}
+        if folder_name:
+            folder_id = find_by_key("DocumentFolder", "name", folder_name)
+            if not folder_id:
+                waiting += 1
+                continue
+            body["folderId"] = folder_id
+        if team_name:
+            team_id = find_by_key("Team", "name", team_name)
+            if not team_id:
+                waiting += 1
+                continue
+            body["teamsIds"] = [team_id]
+        body["fileId"] = upload_attachment(path)
+        code, result = espo_request("POST", "/api/v1/Document", body)
+        if code not in (200, 201) or not isinstance(result, dict) or not result.get("id"):
+            waiting += 1
+            continue
+        path.rename(done / f"{time.strftime('%Y%m%d%H%M%S')}-{path.name}")
+        attached += 1
+    detail = f"{attached} pdf attaccati, {waiting} in attesa"
+    status = "lettura" if held else "ok"
+    mark_run(pipeline["id"], status, detail)
+    return {"attached": attached, "waiting": waiting, "status": status, "detail": detail}
+
+
 def execute_pipeline(pipeline_id: str) -> dict:
     with connect() as conn:
         pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
@@ -2609,7 +2956,7 @@ def execute_pipeline(pipeline_id: str) -> dict:
         if pipeline["cursor_column"] and rows and not held:
             last = rows[-1]
             stamp = str(last.get(pipeline["cursor_column"]) or "")
-            identity = str(last.get(pipeline["external_id_field"]) or "")
+            identity = external_of(pipeline, last)
             if stamp:
                 save_cursor(pipeline_id, stamp, identity)
         settle_closes(pipeline, seen, counts, full=not pipeline["cursor_column"], hold=held)
@@ -2618,7 +2965,11 @@ def execute_pipeline(pipeline_id: str) -> dict:
         return run_result(len(rows), counts, status)
     if link["kind"] == "csv":
         mapping = json.loads(pipeline["mapping_json"])
-        required = carico.required_columns(pipeline["external_id_field"], mapping)
+        required = carico.required_columns(
+            pipeline["external_id_field"],
+            mapping,
+            key_column_list(pipeline)[1:],
+        )
         folder = SCAMBIO / link["id"]
         folder.mkdir(parents=True, exist_ok=True)
         done = folder / "elaborati"
@@ -2650,6 +3001,8 @@ def execute_pipeline(pipeline_id: str) -> dict:
             except Exception:
                 pass
         return run_result(taken, counts, status)
+    if link["kind"] == "pdf":
+        return execute_pdf(pipeline, link, held)
     if link["kind"] == "http":
         records = outbound_rows(pipeline_id)
         url = str(config.get("url") or "").strip() or f"http://127.0.0.1:{PORT}/inbox/{link['id']}/{link['token']}"
@@ -2702,6 +3055,14 @@ def execute_chain(pipeline_id: str, seen: set[str], with_dependencies: bool) -> 
 
 
 def run_pipeline(pipeline_id: str, with_dependencies: bool = False) -> dict:
+    with connect() as conn:
+        exists = conn.execute("SELECT 1 FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+    if exists is not None:
+        decision = silence_for(pipeline_id)
+        if decision["action"] != "scrivi":
+            if decision["action"] == "attesa":
+                note_silence(pipeline_id, decision.get("reason") or "")
+            return silence_reply(decision)
     if not RUN_LOCK.acquire(blocking=False):
         raise RuntimeError("un'esecuzione è già in corso")
     try:
@@ -2727,6 +3088,8 @@ def load_pipeline(pipeline_id: str) -> tuple:
 def anteprima(pipeline_id: str) -> dict:
     pipeline, link = load_pipeline(pipeline_id)
     if link is None or link["kind"] == "webhook":
+        with connect() as conn:
+            conn.execute("UPDATE plan_step SET previewed = 1 WHERE pipeline_id = ?", (pipeline_id,))
         return {
             "detail": "Il webhook non ha righe da leggere. L'anteprima si fa quando il sistema esterno chiama.",
             "created": 0, "updated": 0, "closed": 0, "failed": 0, "unchanged": 0, "pericolose": [],
@@ -2746,7 +3109,11 @@ def anteprima(pipeline_id: str) -> dict:
         full = not pipeline["cursor_column"]
         taken = len(rows)
     elif link["kind"] == "csv":
-        required = carico.required_columns(pipeline["external_id_field"], json.loads(pipeline["mapping_json"]))
+        required = carico.required_columns(
+            pipeline["external_id_field"],
+            json.loads(pipeline["mapping_json"]),
+            key_column_list(pipeline)[1:],
+        )
         folder = SCAMBIO / link["id"]
         taken = 0
         processed = 0
@@ -2764,6 +3131,8 @@ def anteprima(pipeline_id: str) -> dict:
     else:
         raise RuntimeError("questo collegamento non ha un'anteprima")
     settle_closes(pipeline, seen, counts, full=full, hold=True, preview=True)
+    with connect() as conn:
+        conn.execute("UPDATE plan_step SET previewed = 1 WHERE pipeline_id = ?", (pipeline_id,))
     _status, detail = finish_counts(f"{taken} righe in anteprima", counts)
     return {
         "detail": detail,
@@ -2923,13 +3292,301 @@ def resolve_watch(watch_id: int, keep: str) -> dict:
     return {"id": watch_id, "kept": keep}
 
 
+def silence_windows_of(pipeline_id: str) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT start_on, end_on, reason FROM silence_window
+            WHERE pipeline_id IS NULL OR pipeline_id = '' OR pipeline_id = ?
+            """,
+            (pipeline_id,),
+        ).fetchall()
+    return [{"start": row["start_on"], "end": row["end_on"], "reason": row["reason"]} for row in rows]
+
+
+def silence_for(pipeline_id: str, now: datetime | None = None) -> dict:
+    moment = now or datetime.now()
+    with connect() as conn:
+        row = conn.execute("SELECT silence_held FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+    if row is None:
+        raise KeyError(pipeline_id)
+    held = bool(row["silence_held"]) if "silence_held" in row.keys() else False
+    return carico.silence_decision(moment.strftime("%Y-%m-%d"), silence_windows_of(pipeline_id), held)
+
+
+def source_waiting(pipeline_id: str) -> bool:
+    with connect() as conn:
+        pipeline = conn.execute("SELECT connection_id FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+        if pipeline is None:
+            return False
+        queued = conn.execute(
+            "SELECT 1 FROM silence_payload WHERE pipeline_id = ? LIMIT 1",
+            (pipeline_id,),
+        ).fetchone()
+        link = None
+        if pipeline["connection_id"]:
+            link = conn.execute(
+                "SELECT kind FROM connection WHERE id = ?",
+                (pipeline["connection_id"],),
+            ).fetchone()
+    if queued:
+        return True
+    if link is None:
+        return False
+    if link["kind"] == "csv":
+        return folder_has_csv(pipeline["connection_id"])
+    return link["kind"] == "database"
+
+
+def note_silence(pipeline_id: str, reason: str, now: datetime | None = None) -> None:
+    if not source_waiting(pipeline_id):
+        return
+    moment = now or datetime.now()
+    stamp = moment.strftime("%Y-%m-%d %H:%M:%S")
+    detail = f"finestra di silenzio: {reason}" if reason else "finestra di silenzio"
+    with connect() as conn:
+        conn.execute("UPDATE pipeline SET silence_held = 1 WHERE id = ?", (pipeline_id,))
+        already = conn.execute(
+            """
+            SELECT 1 FROM run_log
+            WHERE pipeline_id = ? AND status = 'attesa' AND created_at LIKE ?
+            """,
+            (pipeline_id, stamp[:10] + "%"),
+        ).fetchone()
+        if already is None:
+            conn.execute(
+                "UPDATE pipeline SET last_run = ?, last_status = ?, last_detail = ? WHERE id = ?",
+                (stamp, "attesa", detail[:500], pipeline_id),
+            )
+            conn.execute(
+                "INSERT INTO run_log (pipeline_id, status, detail, created_at) VALUES (?, 'attesa', ?, ?)",
+                (pipeline_id, detail[:500], stamp),
+            )
+
+
+def park_silence(pipeline_id: str, payload: dict, reason: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO silence_payload (pipeline_id, payload_json, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (pipeline_id, json.dumps(payload, ensure_ascii=False), time.strftime("%Y-%m-%d %H:%M:%S")),
+        )
+    note_silence(pipeline_id, reason)
+
+
+def silence_reply(decision: dict) -> dict:
+    if decision["action"] == "fermo":
+        return {
+            "silence": "fermo",
+            "detail": "la finestra è finita e il file è in attesa",
+            "textKey": "La finestra è finita e il file è in attesa. Conferma il file oppure scartalo.",
+            "textParams": {},
+        }
+    reason = decision.get("reason") or "silenzio"
+    return {
+        "silence": "attesa",
+        "detail": f"finestra di silenzio: {reason}",
+        "textKey": "Finestra di silenzio: {motivo}. Il file resta in attesa.",
+        "textParams": {"motivo": reason},
+    }
+
+
+def save_silence(body: dict) -> dict:
+    start = carico.parse_day(body.get("start"))
+    end = carico.parse_day(body.get("end"))
+    if end < start:
+        raise RuntimeError("la finestra finisce prima di iniziare")
+    reason = str(body.get("reason") or "").strip()
+    if not reason:
+        raise RuntimeError("indica il motivo della finestra")
+    pipeline_id = str(body.get("pipelineId") or "").strip() or None
+    if pipeline_id:
+        load_pipeline(pipeline_id)
+    with connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO silence_window (pipeline_id, start_on, end_on, reason) VALUES (?, ?, ?, ?)",
+            (pipeline_id, start, end, reason[:180]),
+        )
+        number = cursor.lastrowid
+    return {"id": number, "pipelineId": pipeline_id, "start": start, "end": end, "reason": reason[:180]}
+
+
+def delete_silence(number: int) -> dict:
+    with connect() as conn:
+        deleted = conn.execute("DELETE FROM silence_window WHERE id = ?", (number,)).rowcount
+    if not deleted:
+        raise RuntimeError("finestra non trovata")
+    return {"deleted": number}
+
+
+def confirm_silence(pipeline_id: str) -> dict:
+    pipeline, link = load_pipeline(pipeline_id)
+    if silence_for(pipeline_id)["action"] == "attesa":
+        raise RuntimeError("la finestra di silenzio è ancora aperta")
+    if not pipeline["silence_held"]:
+        raise RuntimeError("non c'è un file in attesa")
+    with connect() as conn:
+        payloads = conn.execute(
+            "SELECT id, payload_json FROM silence_payload WHERE pipeline_id = ? ORDER BY id",
+            (pipeline_id,),
+        ).fetchall()
+        conn.execute("UPDATE pipeline SET silence_held = 0 WHERE id = ?", (pipeline_id,))
+    replayed = 0
+    for item in payloads:
+        ingest(pipeline_id, json.loads(item["payload_json"]))
+        with connect() as conn:
+            conn.execute("DELETE FROM silence_payload WHERE id = ?", (item["id"],))
+        replayed += 1
+    kind = link["kind"] if link is not None else ""
+    if kind in ("csv", "database"):
+        result = run_pipeline(pipeline_id)
+        result["replayed"] = replayed
+        return result
+    return {"replayed": replayed}
+
+
+def discard_silence(pipeline_id: str) -> dict:
+    pipeline, link = load_pipeline(pipeline_id)
+    if not pipeline["silence_held"]:
+        raise RuntimeError("non c'è un file in attesa")
+    moved = 0
+    if link is not None and link["kind"] == "csv":
+        folder = SCAMBIO / link["id"]
+        side = folder / "scartati"
+        side.mkdir(parents=True, exist_ok=True)
+        for path in sorted(folder.glob("*.csv")):
+            path.rename(side / f"{time.strftime('%Y%m%d%H%M%S')}-{path.name}")
+            moved += 1
+    with connect() as conn:
+        dropped = conn.execute("DELETE FROM silence_payload WHERE pipeline_id = ?", (pipeline_id,)).rowcount
+        conn.execute("UPDATE pipeline SET silence_held = 0 WHERE id = ?", (pipeline_id,))
+    mark_run(pipeline_id, "sospeso", "file in attesa scartato, senza scrivere")
+    return {"discarded": moved, "payloads": dropped}
+
+
+def plan_block(pipeline_id: str) -> str:
+    with connect() as conn:
+        step = conn.execute("SELECT * FROM plan_step WHERE pipeline_id = ?", (pipeline_id,)).fetchone()
+        if step is None:
+            return ""
+        earlier = conn.execute(
+            "SELECT confirmed FROM plan_step WHERE plan_id = ? AND position = ?",
+            (step["plan_id"], step["position"] - 1),
+        ).fetchone()
+    allowed, reason = carico.step_may_enable(True, step["position"], bool(earlier and earlier["confirmed"]))
+    return "" if allowed else reason
+
+
+def save_plan(body: dict) -> dict:
+    raw = body.get("steps") if isinstance(body, dict) else None
+    if not isinstance(raw, list):
+        raise RuntimeError("il piano ha almeno un gradino")
+    steps: list[str] = []
+    for item in raw:
+        pipeline_id = str(item or "").strip()
+        if not pipeline_id or pipeline_id in steps:
+            continue
+        load_pipeline(pipeline_id)
+        steps.append(pipeline_id)
+    with connect() as conn:
+        if not steps:
+            conn.execute("DELETE FROM plan_step")
+            return {"id": "accensione", "steps": []}
+        conn.execute("DELETE FROM plan_step")
+        for index, pipeline_id in enumerate(steps, start=1):
+            conn.execute(
+                """
+                INSERT INTO plan_step (pipeline_id, plan_id, position, confirmed, previewed)
+                VALUES (?, 'accensione', ?, 0, 0)
+                """,
+                (pipeline_id, index),
+            )
+    return {"id": "accensione", "steps": steps}
+
+
+def confirm_step(pipeline_id: str) -> dict:
+    with connect() as conn:
+        step = conn.execute("SELECT * FROM plan_step WHERE pipeline_id = ?", (pipeline_id,)).fetchone()
+        allowed, reason = carico.step_may_confirm(step is not None, bool(step and step["previewed"]))
+        if not allowed:
+            raise RuntimeError(reason)
+        conn.execute("UPDATE plan_step SET confirmed = 1 WHERE pipeline_id = ?", (pipeline_id,))
+        following = conn.execute(
+            """
+            SELECT pipeline.enabled
+            FROM plan_step
+            JOIN pipeline ON pipeline.id = plan_step.pipeline_id
+            WHERE plan_step.plan_id = ? AND plan_step.position = ?
+            """,
+            (step["plan_id"], step["position"] + 1),
+        ).fetchone()
+    return {
+        "id": pipeline_id,
+        "confirmed": True,
+        "nextEnabled": None if following is None else bool(following["enabled"]),
+    }
+
+
 def set_enabled(pipeline_id: str, enabled: bool) -> dict:
     with connect() as conn:
-        found = conn.execute("SELECT id FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+        found = conn.execute("SELECT id, enabled FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
         if found is None:
             raise KeyError(pipeline_id)
+        current = int(found["enabled"] or 0)
+    if enabled and not current:
+        blocked = plan_block(pipeline_id)
+        if blocked:
+            raise RuntimeError(blocked)
+    with connect() as conn:
         conn.execute("UPDATE pipeline SET enabled = ? WHERE id = ?", (1 if enabled else 0, pipeline_id))
     return {"id": pipeline_id, "enabled": bool(enabled)}
+
+
+def consegna_view() -> dict:
+    current = snapshot()
+    return carico.consegna(
+        current.get("publicBase") or "",
+        current.get("espoPublicUrl") or "",
+        current.get("writesEnabled"),
+        current.get("pipelines") or [],
+        current.get("connections") or [],
+        current.get("silence") or [],
+    )
+
+
+def sheet_export() -> str:
+    return carico.sheet_csv(snapshot().get("pipelines") or [], frasi.lingua_corrente())
+
+
+def import_sheet(text: str) -> dict:
+    rows = carico.parse_sheet(text)
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        pipeline_id = str(row.get("pipeline") or "").strip()
+        if not pipeline_id:
+            raise RuntimeError("manca l'integrazione nel foglio")
+        grouped.setdefault(pipeline_id, []).append(row)
+    updated = 0
+    with connect() as conn:
+        for pipeline_id, group in grouped.items():
+            current = conn.execute(
+                "SELECT mapping_json, direction FROM pipeline WHERE id = ?",
+                (pipeline_id,),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError(f"integrazione non trovata {pipeline_id}")
+            if current["direction"] != "in":
+                raise RuntimeError("il foglio vale per le integrazioni in ingresso")
+            mapping = json.loads(current["mapping_json"])
+            revised = carico.apply_sheet(mapping, group)
+            conn.execute(
+                "UPDATE pipeline SET mapping_json = ? WHERE id = ?",
+                (json.dumps(revised, ensure_ascii=False), pipeline_id),
+            )
+            updated += 1
+    return {"pipelines": updated, "rows": len(rows)}
 
 
 def export_config() -> dict:
@@ -2952,6 +3609,7 @@ def export_config() -> dict:
             "onDuplicate": item.get("on_duplicate") or "fail",
             "scheduleAt": item.get("schedule_at") or "",
             "expectAt": item.get("expect_at") or "",
+            "keyColumns": item.get("keyColumns") or [],
             "mapping": item["mapping"],
         })
     return {"connections": current["connections"], "pipelines": pipelines}
@@ -3006,6 +3664,11 @@ def import_config(body: dict) -> dict:
                     item.get("onDuplicate") or "fail",
                 ),
             )
+            if isinstance(item.get("keyColumns"), list) and len(item.get("keyColumns") or []) >= 2:
+                conn.execute(
+                    "UPDATE pipeline SET key_columns = ? WHERE id = ?",
+                    (json.dumps(item["keyColumns"], ensure_ascii=False), item["id"]),
+                )
         saved_pipelines += 1
     return {"connections": saved_connections, "pipelines": saved_pipelines}
 
@@ -3046,8 +3709,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_json(self, code: int, payload: dict) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode()
+        self.send_bytes(code, raw, "application/json; charset=utf-8")
+
+    def send_bytes(self, code: int, raw: bytes, content_type: str, filename: str | None = None) -> None:
         self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
+        if filename:
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
@@ -3100,6 +3768,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/export":
                 self.send_json(200, export_config())
                 return
+            if path == "/api/foglio":
+                self.send_bytes(200, sheet_export().encode("utf-8"), "text/csv; charset=utf-8", "nesso-abbinamento.csv")
+                return
+            if path == "/api/consegna":
+                self.send_json(200, consegna_view())
+                return
         except Exception as error:
             self.send_fail(400, error)
             return
@@ -3124,6 +3798,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/import":
                 self.send_json(200, import_config(self.read_json()))
+                return
+            if path == "/api/foglio":
+                body = self.read_json()
+                self.send_json(200, import_sheet(str(body.get("text") or "")))
+                return
+            if path == "/api/privacy":
+                body = self.read_json()
+                self.send_json(200, privacy_for(str(body.get("contact") or ""), str(body.get("company") or "")))
                 return
             if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "run":
                 body = self.read_json()
@@ -3162,6 +3844,12 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ["api", "connections"] and parts[3] == "campione":
                 self.send_json(200, connection_sample(parts[2]))
                 return
+            if path == "/api/silenzio":
+                self.send_json(200, save_silence(self.read_json()))
+                return
+            if path == "/api/piani":
+                self.send_json(200, save_plan(self.read_json()))
+                return
             if path == "/api/proponi":
                 body = self.read_json()
                 self.send_json(200, {
@@ -3173,9 +3861,35 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 })
                 return
-            if path == "/api/ricette/anagrafiche":
+            if len(parts) == 3 and parts[:2] == ["api", "ricette"]:
                 body = self.read_json()
-                self.send_json(200, carico.recipe_anagrafiche(list(body.get("fields") or [])))
+                fields = list(body.get("fields") or [])
+                recipes = {
+                    "anagrafiche": carico.recipe_anagrafiche,
+                    "contatti": carico.recipe_contatti,
+                    "sedi": carico.recipe_sedi,
+                    "listino": carico.recipe_listino,
+                }
+                recipe = recipes.get(parts[2])
+                if recipe is None:
+                    self.send_fail(404, "non trovato")
+                    return
+                self.send_json(200, recipe(fields))
+                return
+            if len(parts) == 5 and parts[:2] == ["api", "pipelines"] and parts[3] == "silenzio" and parts[4] == "conferma":
+                self.send_json(200, confirm_silence(parts[2]))
+                return
+            if len(parts) == 5 and parts[:2] == ["api", "pipelines"] and parts[3] == "silenzio" and parts[4] == "scarta":
+                self.send_json(200, discard_silence(parts[2]))
+                return
+            if len(parts) == 5 and parts[:2] == ["api", "pipelines"] and parts[3] == "gradino" and parts[4] == "conferma":
+                self.send_json(200, confirm_step(parts[2]))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "proposte"] and parts[3] == "conferma":
+                self.send_json(200, confirm_proposal(int(parts[2])))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "proposte"] and parts[3] == "lascia":
+                self.send_json(200, leave_proposal(int(parts[2])))
                 return
             if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "enabled":
                 body = self.read_json()
@@ -3191,6 +3905,12 @@ class Handler(BaseHTTPRequestHandler):
                 pipeline_id = path.removeprefix("/api/ingest/")
                 body = self.read_json()
                 try:
+                    decision = silence_for(pipeline_id)
+                    if decision["action"] != "scrivi":
+                        if isinstance(body, dict):
+                            park_silence(pipeline_id, body, decision.get("reason") or "")
+                        self.send_json(200, silence_reply(decision))
+                        return
                     self.send_json(200, ingest(pipeline_id, body))
                 except Exception as error:
                     remember_reject(pipeline_id, "", body, str(error))
@@ -3214,6 +3934,9 @@ class Handler(BaseHTTPRequestHandler):
         frasi.imposta_lingua(self.headers.get("X-Nesso-Lang"))
         path = urllib.parse.urlparse(self.path).path
         try:
+            if path.startswith("/api/silenzio/"):
+                self.send_json(200, delete_silence(int(path.removeprefix("/api/silenzio/"))))
+                return
             if path.startswith("/api/pipelines/"):
                 self.send_json(200, delete_pipeline(path.removeprefix("/api/pipelines/")))
                 return

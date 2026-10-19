@@ -21,6 +21,8 @@ Il modello è il testo salvato, per esempio `richieste-del-sito-verso-lead:{id}`
 
 Se l'integrazione chiede la colonna `codice` e il CSV ha `codice` vuoto, l'errore è «manca il campo codice». Se il modello cita un nome che il corpo non ha, la graffa resta e l'errore è «chiave esterna incompleta».
 
+Una colonna sola resta il caso normale: la chiave in coda è la cella, e il modello resta `{id}:{colonna}`. Se si indicano altre colonne, per esempio codice società e codice cliente, la chiave in coda è la concatenazione con `|`, `MI|C001`. Due righe con lo stesso codice cliente e società diverse sono due record. La stessa coppia rilanciata aggiorna quello già scritto. Un valore che contiene `|` si rifiuta, perché il separatore non sarebbe più univoco. Sulla pagina, accanto al campo, si vedono fino a tre chiavi calcolate sulle righe vere.
+
 ## Abbinamento
 
 Ogni regola legge `transform`.

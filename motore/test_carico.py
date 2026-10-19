@@ -250,5 +250,250 @@ class Badge(unittest.TestCase):
         )
 
 
+class ChiaveComposta(unittest.TestCase):
+    def test_una_colonna_resta_la_cella(self):
+        self.assertEqual(carico.compose_identity({"codice": "C001"}, ["codice"]), "C001")
+        self.assertEqual(carico.compose_identity({"codice": "C0|01"}, ["codice"]), "C0|01")
+
+    def test_due_societa_non_si_mescolano(self):
+        columns = ["societa", "codice"]
+        nord = carico.compose_identity({"societa": "MI", "codice": "C001"}, columns)
+        sud = carico.compose_identity({"societa": "TO", "codice": "C001"}, columns)
+        self.assertEqual(nord, "MI|C001")
+        self.assertEqual(sud, "TO|C001")
+        self.assertNotEqual(nord, sud)
+        again = carico.compose_identity({"societa": "MI", "codice": "C001"}, columns)
+        self.assertEqual(again, nord)
+
+    def test_manca_una_parte(self):
+        with self.assertRaises(RuntimeError):
+            carico.compose_identity({"societa": "MI", "codice": ""}, ["societa", "codice"])
+
+    def test_le_tre_righe_vere(self):
+        rows = [
+            {"societa": "MI", "codice": "C001"},
+            {"societa": "MI", "codice": "C002"},
+            {"societa": "TO", "codice": "C001"},
+            {"societa": "TO", "codice": "C009"},
+        ]
+        self.assertEqual(carico.identity_preview(rows, ["societa", "codice"]), ["MI|C001", "MI|C002", "TO|C001"])
+
+    def test_le_colonne_obbligatorie_restano_una(self):
+        required = carico.required_columns("codice", [{"from": "piva", "required": True}])
+        self.assertEqual(required, ["codice", "piva"])
+
+
+class FinestraEPiano(unittest.TestCase):
+    def test_senza_finestre_si_scrive(self):
+        decision = carico.silence_decision("2026-10-19", [], False)
+        self.assertEqual(decision["action"], "scrivi")
+
+    def test_dentro_la_finestra_il_file_aspetta(self):
+        windows = [{"start": "2026-10-18", "end": "2026-10-20", "reason": "inventario"}]
+        decision = carico.silence_decision("2026-10-19", windows, False)
+        self.assertEqual(decision["action"], "attesa")
+        self.assertEqual(decision["reason"], "inventario")
+
+    def test_dopo_la_finestra_il_file_non_parte(self):
+        decision = carico.silence_decision("2026-10-21", [{"start": "2026-10-18", "end": "2026-10-20", "reason": "fiera"}], True)
+        self.assertEqual(decision["action"], "fermo")
+
+    def test_il_gradino_senza_piano_si_accende(self):
+        allowed, reason = carico.step_may_enable(False, 2, False)
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+
+    def test_il_gradino_seguente_aspetta_la_conferma(self):
+        allowed, reason = carico.step_may_enable(True, 2, False)
+        self.assertFalse(allowed)
+        self.assertIn("precedente", reason)
+        later, _reason = carico.step_may_enable(True, 2, True)
+        self.assertTrue(later)
+
+    def test_la_conferma_vuole_l_anteprima(self):
+        allowed, reason = carico.step_may_confirm(True, False)
+        self.assertFalse(allowed)
+        self.assertIn("anteprima", reason)
+        seen, _reason = carico.step_may_confirm(True, True)
+        self.assertTrue(seen)
+
+
+CAMPI_ACCOUNT = [
+    {"name": "name", "label": "Nome"},
+    {"name": "emailAddress", "label": "Email"},
+    {"name": "phoneNumber", "label": "Telefono"},
+    {"name": "billingAddressCity", "label": "Città"},
+    {"name": "cPartitaIva", "label": "Partita IVA"},
+    {"name": "shippingAddressStreet", "label": "Indirizzo di spedizione"},
+    {"name": "shippingAddressCity", "label": "Città di spedizione"},
+    {"name": "shippingAddressPostalCode", "label": "CAP"},
+    {"name": "shippingAddressState", "label": "Provincia"},
+    {"name": "shippingAddressCountry", "label": "Nazione"},
+]
+CAMPI_CONTATTO = [
+    {"name": "firstName", "label": "Nome"},
+    {"name": "lastName", "label": "Cognome"},
+    {"name": "emailAddress", "label": "Email"},
+    {"name": "phoneNumber", "label": "Telefono"},
+]
+
+
+class RicetteSediEContatti(unittest.TestCase):
+    def test_i_contatti_sono_contact_e_l_azienda_e_un_legame(self):
+        recipe = carico.recipe_contatti(CAMPI_CONTATTO)
+        self.assertEqual(recipe["entity"], "Contact")
+        self.assertEqual(recipe["externalIdField"], "codice")
+        self.assertIn("non è un connettore", recipe["noteKey"].lower())
+        by_name = {row["from"]: row for row in recipe["rows"]}
+        self.assertEqual(by_name["nome"]["to"], "firstName")
+        self.assertEqual(by_name["cognome"]["to"], "lastName")
+        self.assertEqual(by_name["azienda"]["role"], "link")
+        self.assertEqual(by_name["azienda"]["lookupEntity"], "Account")
+        self.assertEqual(by_name["azienda"]["lookupBy"], "name")
+
+    def test_le_sedi_scrivono_l_indirizzo_di_spedizione(self):
+        recipe = carico.recipe_sedi(CAMPI_ACCOUNT)
+        self.assertEqual(recipe["entity"], "Account")
+        self.assertEqual(recipe["externalIdField"], "codice")
+        by_name = {row["from"]: row for row in recipe["rows"]}
+        self.assertEqual(by_name["indirizzo"]["to"], "shippingAddressStreet")
+        self.assertEqual(by_name["cap"]["to"], "shippingAddressPostalCode")
+        self.assertEqual(by_name["città"]["to"], "shippingAddressCity")
+        senza = {row["from"]: row["to"] for row in carico.recipe_sedi([{"name": "name"}])["rows"]}
+        self.assertEqual(senza["indirizzo"], "")
+
+    def test_l_anagrafica_resta_account(self):
+        recipe = carico.recipe_anagrafiche(CAMPI_ACCOUNT)
+        self.assertEqual(recipe["entity"], "Account")
+        self.assertEqual(recipe["rows"][0]["to"], "name")
+        self.assertEqual(recipe["rows"][1]["to"], "cPartitaIva")
+
+
+class FoglioAbbinamento(unittest.TestCase):
+    def test_il_foglio_tiene_il_padrone_e_non_il_legame(self):
+        pipelines = [
+            {
+                "id": "clienti",
+                "direction": "in",
+                "mapping": [
+                    {"from": "nome", "to": "name", "transform": "copy", "owner": "espo", "required": True},
+                    {"from": "azienda", "to": "accountId", "transform": "lookup", "lookupEntity": "Account", "lookupBy": "name"},
+                ],
+            },
+            {"id": "uscita", "direction": "out", "mapping": [{"from": "name", "to": "nome", "transform": "copy"}]},
+        ]
+        text = carico.sheet_csv(pipelines, "it")
+        self.assertNotIn("uscita", text)
+        self.assertNotIn("azienda", text)
+        parsed = carico.parse_sheet(text)
+        self.assertEqual(parsed[0]["owner"], "espo")
+        self.assertTrue(parsed[0]["required"])
+        revised = carico.apply_sheet(pipelines[0]["mapping"], parsed)
+        by_from = {row["from"]: row for row in revised}
+        self.assertEqual(by_from["nome"]["owner"], "espo")
+        self.assertEqual(by_from["azienda"]["transform"], "lookup")
+        english = carico.parse_sheet(carico.sheet_csv(pipelines, "en"))
+        self.assertEqual(english[0]["pipeline"], "clienti")
+        self.assertTrue(english[0]["required"])
+
+    def test_una_colonna_ripetuta_e_un_foglio_vuoto_si_rifiutano(self):
+        with self.assertRaises(RuntimeError):
+            carico.apply_sheet(
+                [{"from": "nome", "to": "name", "transform": "copy"}],
+                [{"from": "nome", "to": "name"}, {"from": "nome", "to": "emailAddress"}],
+            )
+        with self.assertRaises(RuntimeError):
+            carico.parse_sheet("")
+        with self.assertRaises(RuntimeError):
+            carico.apply_sheet(
+                [{"from": "nome", "to": "name", "transform": "copy"}],
+                [{"from": "", "to": ""}],
+            )
+
+
+class PaginaConsegna(unittest.TestCase):
+    def test_gli_indirizzi_e_il_padrone_senza_segreti(self):
+        page = carico.consegna(
+            "http://localhost:8091",
+            "http://localhost:8088",
+            False,
+            [{
+                "id": "clienti",
+                "name": "Clienti",
+                "direction": "in",
+                "espo_entity": "Account",
+                "enabled": 1,
+                "schedule_at": "02:10",
+                "schedule_minutes": 0,
+                "connection_id": "file",
+                "read_only": 0,
+                "mapping": [{"from": "nome", "to": "name", "owner": "espo", "transform": "copy"}],
+            }],
+            [{
+                "id": "file",
+                "name": "File notte",
+                "kind": "csv",
+                "config": {"password": "segreto-demo", "token": "tok-segreto"},
+                "url": "http://localhost:8091/hook/file/tok-segreto",
+            }],
+            [{"start_on": "2026-12-01", "end_on": "2026-12-31", "reason": "chiusura", "pipeline_id": ""}],
+        )
+        blob = str(page)
+        self.assertNotIn("segreto", blob)
+        self.assertNotIn("hook", blob)
+        self.assertNotIn("password", blob)
+        self.assertEqual(page["nesso"], "http://localhost:8091")
+        self.assertEqual(page["espo"], "http://localhost:8088")
+        self.assertFalse(page["writesEnabled"])
+        self.assertEqual(page["integrations"][0]["scheduleAt"], "02:10")
+        self.assertEqual(page["integrations"][0]["connection"], "File notte")
+        self.assertEqual(page["integrations"][0]["owners"][0]["owner"], "espo")
+        self.assertEqual(page["silence"][0]["reason"], "chiusura")
+
+
+class ListinoPdfFasePrivacy(unittest.TestCase):
+    def test_il_listino_e_product_e_non_inventa_una_scheda(self):
+        fields = [
+            {"name": "name"},
+            {"name": "partNumber"},
+            {"name": "unitPrice"},
+            {"name": "unitPriceCurrency"},
+        ]
+        recipe = carico.recipe_listino(fields)
+        self.assertEqual(recipe["entity"], "Product")
+        self.assertNotIn("CListino", str(recipe))
+        payload = carico.listino_payload({"codice": "P1", "descrizione": "Vite", "prezzo": 2.5, "valuta": "EUR"})
+        self.assertEqual(payload["entity"], "Product")
+        self.assertEqual(payload["name"], "Vite")
+        self.assertEqual(payload["partNumber"], "P1")
+        self.assertEqual(payload["unitPrice"], 2.5)
+        self.assertEqual(payload["unitPriceCurrency"], "EUR")
+        vuoto = {row["from"]: row["to"] for row in carico.recipe_listino([{"name": "name"}])["rows"]}
+        self.assertEqual(vuoto["prezzo"], "")
+
+    def test_il_pdf_vuole_la_chiave_intera(self):
+        keys = ["C001", "C0012", "ord"]
+        self.assertEqual(carico.match_pdf("fattura-C0012.pdf", keys), "C0012")
+        self.assertEqual(carico.match_pdf("fattura-C001.pdf", keys), "C001")
+        self.assertEqual(carico.match_pdf("ordine.pdf", keys), "")
+        self.assertEqual(carico.match_pdf("senza.pdf", ["C001"]), "")
+
+    def test_la_fase_non_scatta_se_e_gia_quella(self):
+        self.assertEqual(carico.stage_proposal("Prospecting", "Closed Won"), "Closed Won")
+        self.assertEqual(carico.stage_proposal("Closed Won", "Closed Won"), "")
+        self.assertEqual(carico.stage_proposal("Prospecting", ""), "")
+
+    def test_l_export_non_cancella_e_salta_la_password(self):
+        rows = [
+            {"at": "2026-10-19", "entity": "Contact", "external_key": "CNT-1", "espo_id": "c1", "field": "emailAddress", "value": "a@b.c"},
+            {"at": "2026-10-19", "entity": "Contact", "external_key": "CNT-1", "espo_id": "c1", "field": "password", "value": "segreto"},
+            {"at": "2026-10-19", "entity": "Account", "external_key": "C001", "espo_id": "a1", "field": "name", "value": "Nord"},
+        ]
+        exported = carico.privacy_export(rows, "CNT-1", "C001")
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([item["field"] for item in exported], ["emailAddress", "name"])
+        self.assertEqual(carico.privacy_export(rows, "", ""), [])
+
+
 if __name__ == "__main__":
     unittest.main()

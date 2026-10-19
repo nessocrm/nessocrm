@@ -104,6 +104,10 @@ In the trial: `scambio/file-notturno/elaborati/20261017105401-contatti.csv`, one
 
 A CSV without a required column, including the identity one, produces a single reject "manca la colonna …" and is not moved. The next run tries again. Files already in `elaborati/` are not read again. If the integration has an "expected by" time and at that time there is no successful run today, home is red and the journal records the absence once a day.
 
+## PDF on the customer
+
+The connection is `pdf`. The `*.pdf` files are dropped in `scambio/{id}`, not in subfolders. If the name contains a company's key, as a whole word, the file becomes a Document linked to that Account, in the document folder and the team written on the connection, and it moves to `elaborati/`. Between two keys the longer one wins: `C001` does not take `fattura-C0012.pdf`. A name without a key stays in the folder. This is not the general document channel: it is this gesture.
+
 ## Outbound HTTP
 
 Meant for a portal that receives the changes of Espo.

@@ -21,6 +21,8 @@ The template is the saved text, for example `richieste-del-sito-verso-lead:{id}`
 
 If the integration asks for the column `codice` and the CSV has `codice` empty, the error is "missing field codice". If the template names a key the body does not have, the brace stays and the error is "external key incomplete".
 
+One column stays the normal case: the queue key is the cell, and the template stays `{id}:{column}`. If other columns are named, for example company code and customer code, the queue key is the concatenation with `|`, `MI|C001`. Two rows with the same customer code and different companies are two records. The same pair sent again updates the one already written. A value that contains `|` is refused, because the separator would no longer be unique. On the page, next to the field, up to three keys calculated on the real rows are shown.
+
 ## Mapping
 
 Each rule reads `transform`.

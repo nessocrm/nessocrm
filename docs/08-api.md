@@ -187,11 +187,13 @@ In uscita, `from` è il campo Espo:
 
 In ingresso, prima di salvare, il motore chiama la creazione di `externalKey` sulla scheda. Se Espo rifiuta il campo, il salvataggio fallisce.
 
+`keyColumns` è l'elenco ordinato delle colonne della chiave. Con una sola colonna, o senza il campo, la chiave resta quella di `externalIdField` e un salvataggio non riscrive il modello se la colonna non è cambiata. Con due o più colonne la chiave in coda è la concatenazione con `|` e il modello diventa `{id}:{prima}|{seconda}`.
+
 Errori tipici: «manca il nome dell'integrazione», «scegli la scheda Espo», «indica il campo che identifica il record nel sistema esterno», «abbina almeno un campo», «scheda Espo non disponibile», «campi Espo non riconosciuti: …», «la cadenza può essere manuale, 5, 15 o 60 minuti», «il collegamento e il verso non coincidono».
 
 ## POST /api/pipelines/{id}/run
 
-Corpo facoltativo `{"withDependencies": true}`. Se è vero, prima parte l'integrazione indicata in `dependsOn`, e la sua, a catena. La risposta dipende dal canale.
+Corpo facoltativo `{"withDependencies": true}`. Se è vero, prima parte l'integrazione indicata in `dependsOn`, e la sua, a catena. Se una finestra di silenzio copre oggi, la risposta ha `silence` `attesa` e non scrive. Se la finestra è finita e il file è ancora in attesa, `silence` è `fermo`. Senza finestre la risposta dipende dal canale.
 
 | Canale | Corpo di successo |
 |---|---|
@@ -240,9 +242,57 @@ Corpo `columns`, `fields` (nome e etichetta dei campi della scheda) e `samples`.
 
 Corpo `fields` della scheda Account. Risponde con `id` `anagrafiche`, `entity` `Account`, `externalIdField` `codice`, le righe dell'abbinamento e `noteKey`. Non crea l'integrazione: la pagina applica le righe e la persona le può ancora cambiare.
 
+## POST /api/ricette/contatti e POST /api/ricette/sedi
+
+Stessa forma. Contatti risponde `entity` `Contact`, chiave `codice`, e una riga `azienda` con `role` `link` verso Account, cercata per `name`. Sedi risponde `entity` `Account` e le colonne dell'indirizzo di spedizione, solo se il campo c'è già. Non creano schede.
+
+## GET /api/consegna
+
+Indirizzi pubblici di Nesso e di Espo, integrazioni con orario, collegamento per nome e padrone di ogni campo, finestre di silenzio, e se le scritture sono accese. Non ci sono password, token, né gli indirizzi di hook e inbox.
+
+## GET /api/foglio e POST /api/foglio
+
+Lo scarico è un CSV separato da punto e virgola: integrazione, colonna, campo, trasformazione, padrone, obbligatorio. La lingua dell'intestazione è quella della pagina. Il caricamento, corpo `{"text": "..."}`, aggiorna solo quei campi sulle integrazioni in ingresso citate nel file. Un collegamento verso un'altra scheda resta. Un'integrazione assente dal file non cambia. Il JSON di `/api/export` resta il passaggio della configurazione.
+
+## POST /api/ricette/listino
+
+Stessa forma delle altre ricette. `entity` è `Product`. Le righe sono descrizione, codice, prezzo e valuta, solo se il campo c'è già. Non crea la scheda.
+
+## POST /api/proposte/{id}/conferma e POST /api/proposte/{id}/lascia
+
+La conferma scrive il valore proposto sulla scheda dell'offerta. Lascia toglie la proposta e non scrive. Nessuna delle due cancella lo storico.
+
+## POST /api/privacy
+
+Corpo `contact` e `company`, le chiavi esterne. Risponde con le righe che Nesso ha scritto, senza i campi il cui nome contiene `password`, e con `kept`, il numero di righe di storico rimaste. Non chiude e non cancella. Se mancano entrambe le chiavi risponde 400.
+
 ## POST /api/watch/{id}
 
 `{"keep": "espo"}` lascia il valore attuale. `{"keep": "sorgente"}` scrive quello in arrivo.
+
+## POST /api/piani
+
+Corpo `steps`, elenco di id di integrazioni già salvate, nell'ordine. Sostituisce il piano. Un elenco vuoto lo toglie. Non cambia `enabled`: nessun gradino si accende da solo. Il gradino 1 si riattiva come qualunque integrazione. Dal gradino 2 in poi, `POST /api/pipelines/{id}/enabled` con `true` risponde 400 «il gradino precedente non è stato confermato» finché il precedente non ha avuto l'anteprima e `POST /api/pipelines/{id}/gradino/conferma`. Quella conferma non accende il successivo. Un'integrazione che non è nel piano si mette in pausa e si riattiva come prima.
+
+## POST /api/pipelines/{id}/gradino/conferma
+
+Segna confermato il gradino, se l'anteprima di quell'integrazione è stata aperta. Non accende il gradino dopo. Risposta `confirmed` e `nextEnabled`.
+
+## POST /api/silenzio
+
+Corpo `start`, `end` (`AAAA-MM-GG`), `reason`, e `pipelineId` vuoto se la finestra vale per tutte. In quei giorni il giro, il webhook e `POST /api/ingest` non scrivono. Il CSV resta nella cartella. Il giorno dopo, con il file ancora in attesa, il pianificatore non parte da solo.
+
+## DELETE /api/silenzio/{id}
+
+Toglie la finestra. Non scarta il file già in attesa.
+
+## POST /api/pipelines/{id}/silenzio/conferma
+
+Dopo la fine della finestra, scrive il file in attesa e i webhook parcheggiati. Se la finestra è ancora aperta risponde 400.
+
+## POST /api/pipelines/{id}/silenzio/scarta
+
+Sposta il CSV in `scartati/` e butta i webhook parcheggiati. Non chiama Espo.
 
 ## POST /api/pipelines/{id}/enabled
 

@@ -104,6 +104,10 @@ Nella prova: `scambio/file-notturno/elaborati/20261017105401-contatti.csv`, una 
 
 Un CSV senza una colonna obbligatoria, compresa quella identificativa, produce un solo scarto «manca la colonna …» e non viene spostato. Il giro dopo riprova. I file già in `elaborati/` non si rileggono. Se l'integrazione ha un'ora «atteso entro» e a quell'ora non c'è un giro riuscito di oggi, la home è rossa e il giornale registra l'assenza una volta al giorno.
 
+## PDF sul cliente
+
+Il collegamento è `pdf`. I file `*.pdf` si depositano in `scambio/{id}`, non nelle sottocartelle. Se il nome contiene la chiave di un'azienda, come parola intera, il file diventa un Document collegato a quell'Account, nella cartella documenti e nel team scritti sul collegamento, e si sposta in `elaborati/`. Fra due chiavi vince la più lunga: `C001` non prende `fattura-C0012.pdf`. Un nome senza chiave resta in cartella. Non è il canale documenti generale: è questo gesto.
+
 ## HTTP in uscita
 
 Pensato per un portale che riceve i cambiamenti di Espo.

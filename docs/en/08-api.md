@@ -187,11 +187,13 @@ An empty `connectionId` is allowed by the API. The page does not allow it. Passi
 
 Inbound, before saving, the engine calls the creation of `externalKey` on the entity. If Espo refuses the field, the save fails.
 
+`keyColumns` is the ordered list of key columns. With a single column, or without the field, the key stays that of `externalIdField` and a save does not rewrite the template if the column has not changed. With two or more columns the queue key is the concatenation with `|` and the template becomes `{id}:{first}|{second}`.
+
 Typical errors: "missing integration name", "choose the Espo entity", "name the field that identifies the record in the external system", "map at least one field", "Espo entity not available", "unrecognised Espo fields: …", "the cadence can be manual, 5, 15 or 60 minutes", "the connection and the direction do not match".
 
 ## POST /api/pipelines/{id}/run
 
-Optional body `{"withDependencies": true}`. If it is true, the integration named in `dependsOn` starts first, and its own, in a chain. The response depends on the channel.
+Optional body `{"withDependencies": true}`. If it is true, the integration named in `dependsOn` starts first, and its own, in a chain. If a quiet window covers today, the response has `silence` `attesa` and does not write. If the window has ended and the file is still waiting, `silence` is `fermo`. With no windows the response depends on the channel.
 
 | Channel | Success body |
 |---|---|
@@ -240,9 +242,57 @@ Body `columns`, `fields` (name and label of the entity fields) and `samples`. It
 
 Body `fields` of the Account entity. Answers with `id` `anagrafiche`, `entity` `Account`, `externalIdField` `codice`, the mapping rows and `noteKey`. It does not create the integration: the page applies the rows and the person can still change them.
 
+## POST /api/ricette/contatti and POST /api/ricette/sedi
+
+Same shape. Contacts answers `entity` `Contact`, key `codice`, and an `azienda` row with `role` `link` toward Account, looked up by `name`. Sites answers `entity` `Account` and the shipping-address columns, only if the field is already there. They do not create entities.
+
+## GET /api/consegna
+
+Public addresses of Nesso and of Espo, integrations with schedule, connection by name and the owner of each field, quiet windows, and whether writes are on. There are no passwords, no tokens, and no hook or inbox addresses.
+
+## GET /api/foglio and POST /api/foglio
+
+The download is a semicolon-separated CSV: integration, column, field, transform, owner, required. The header language is the page language. The upload, body `{"text": "..."}`, updates only those fields on the inbound integrations named in the file. A link to another entity stays. An integration absent from the file does not change. The JSON of `/api/export` stays the way to move the configuration.
+
+## POST /api/ricette/listino
+
+Same shape as the other recipes. `entity` is `Product`. The rows are description, code, price and currency, only if the field is already there. It does not create the entity.
+
+## POST /api/proposte/{id}/conferma and POST /api/proposte/{id}/lascia
+
+Confirm writes the proposed value on the offer entity. Leave removes the proposal and does not write. Neither deletes the history.
+
+## POST /api/privacy
+
+Body `contact` and `company`, the external keys. It answers with the rows Nesso wrote, without fields whose name contains `password`, and with `kept`, the number of history rows that remain. It does not close and it does not delete. If both keys are missing it answers 400.
+
 ## POST /api/watch/{id}
 
 `{"keep": "espo"}` leaves the current value. `{"keep": "sorgente"}` writes the incoming one.
+
+## POST /api/piani
+
+Body `steps`, a list of ids of integrations already saved, in order. It replaces the plan. An empty list removes it. It does not change `enabled`: no step turns on by itself. Step 1 is resumed like any integration. From step 2 on, `POST /api/pipelines/{id}/enabled` with `true` answers 400 "the previous step has not been confirmed" until the previous one has had its preview and `POST /api/pipelines/{id}/gradino/conferma`. That confirmation does not turn the next one on. An integration that is not in the plan is paused and resumed as before.
+
+## POST /api/pipelines/{id}/gradino/conferma
+
+Marks the step confirmed, if that integration's preview has been opened. It does not turn the next step on. The response has `confirmed` and `nextEnabled`.
+
+## POST /api/silenzio
+
+Body `start`, `end` (`YYYY-MM-DD`), `reason`, and an empty `pipelineId` when the window applies to all. On those days the run, the webhook and `POST /api/ingest` do not write. The CSV stays in the folder. The day after, with the file still waiting, the scheduler does not start on its own.
+
+## DELETE /api/silenzio/{id}
+
+Removes the window. It does not discard a file that is already waiting.
+
+## POST /api/pipelines/{id}/silenzio/conferma
+
+After the window has ended, it writes the waiting file and the parked webhooks. If the window is still open it answers 400.
+
+## POST /api/pipelines/{id}/silenzio/scarta
+
+Moves the CSV into `scartati/` and drops the parked webhooks. It does not call Espo.
 
 ## POST /api/pipelines/{id}/enabled
 

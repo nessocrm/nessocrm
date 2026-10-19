@@ -103,11 +103,11 @@ Universale, qui, ha un senso preciso.
 2. Un abbinamento di tipo collegamento crea, se manca, il lookup verso un'altra scheda. All'ingresso il valore esterno viene cercato su quella scheda (per chiave esterna, per nome, o per un altro campo) e il record nuovo riceve l'id trovato. Se non c'è corrispondenza, la riga non entra.
 3. L'abbinamento è un dato salvato in SQLite, non una funzione scritta per un cliente. Aggiungere una colonna vuol dire aggiungere una riga nel modulo.
 4. L'identità del record è una convenzione unica per tutte le schede: `{id integrazione}:{valore esterno}`. Sulle schede standard il campo è `cExternalKey`. Sulle schede create da qui è `externalKey`. Due sistemi possono puntare alla stessa scheda senza pestarsi i record, perché la chiave contiene l'id dell'integrazione.
-5. I quattro canali coprono il modo in cui un sistema esterno di solito consegna i dati: chiamata, tabella, file, ricezione. Nessuno di questi canali ha dentro il nome di un flusso o di un'anagrafica particolare.
+5. I canali coprono il modo in cui un sistema esterno di solito consegna i dati: chiamata, tabella, file, ricezione, e un PDF il cui nome contiene la chiave dell'azienda. Nessuno di questi canali ha dentro il nome di un flusso o di un'anagrafica particolare.
 
 ## Che cosa questa versione tiene fisso
 
-- I tipi di canale sono quattro. Non c'è SFTP, non c'è Postgres, non c'è una coda, non c'è OAuth.
+- I tipi di canale sono webhook, database, CSV, PDF sul cliente e HTTP in uscita. Non c'è SFTP, non c'è Postgres, non c'è una coda, non c'è OAuth.
 - Il database letto è MySQL o MariaDB, e solo in SELECT.
 - Il motore non scrive sul sistema sorgente.
 - Se Espo rifiuta un record perché ne esiste uno simile con un'altra chiave, la riga viene scartata, salvo che l'integrazione sia impostata per aggiornare quel record.

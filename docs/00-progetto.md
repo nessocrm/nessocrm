@@ -65,6 +65,22 @@ Padrone del campo, con svuotamento solo sui campi della sorgente e coda se il pa
 
 La pagina parla italiano o inglese. La scelta sta nel menu, chiave `nesso-lang`. Le frasi composte della home hanno una chiave, così la stessa percentuale si legge nella lingua scelta. Il manuale è in italiano e in inglese. Il giornale già scritto non si riscrive. Origine Nesso usa la lingua del giro; il pianificatore scrive in italiano. Nel passo di abbinamento, «Proponi l'abbinamento» legge i nomi delle colonne e non salva finché la persona non conferma. «Ricetta anagrafiche» prepara Account con i campi che un export di clienti ha già, e dice che non è un connettore certificato. I sinonimi sono un elenco per lingua. I test stanno in `motore/test_frasi.py`.
 
+### Chiave di gruppo, 19 ottobre 2026
+
+La chiave può essere più colonne. Il caso del gruppo è codice società più codice cliente: in coda diventa `MI|C001`. Due società con lo stesso codice cliente restano due aziende, e la stessa coppia rilanciata aggiorna. Una colonna sola non cambia: la cella resta la chiave, anche se contiene `|`. I test sono nella classe `ChiaveComposta` e nei giri `due societa` e `una colonna`.
+
+### Consegna, 19 ottobre 2026
+
+«Ricetta contatti» prepara Contact: codice, nome, cognome, email, telefono, e l'azienda cercata per nome. «Ricetta sedi» prepara l'indirizzo di spedizione sull'Account, una sede per azienda. Nessuna delle due crea una scheda. La pagina di consegna, `#/consegna`, elenca indirizzi, integrazioni, orario, padrone di ogni campo e come si ferma la scrittura, e non contiene password né token. Il foglio di abbinamento si scarica e si ricarica: colonna, campo, trasformazione, padrone, obbligatorio. Un legame resta dov'è. Il JSON resta lo scarico della configurazione. I test sono nelle classi `RicetteSediEContatti`, `FoglioAbbinamento` e `PaginaConsegna`.
+
+### Listino, PDF, fase, privacy, 19 ottobre 2026
+
+«Ricetta listino» prepara il Product di Espo: codice, descrizione, prezzo, valuta. Non crea la scheda. In questa prova Product non c'è, e i campi restano vuoti finché la scheda non è già in Espo. Un collegamento PDF deposita i file in `scambio/{id}`: se il nome contiene la chiave dell'azienda, il file diventa un Document sul cliente, nella cartella e nel team indicati, e si sposta in `elaborati/`. Un nome senza quella chiave resta dov'è. Un ordine può proporre la fase di un'offerta: la fase non cambia finché, in Attività, non si conferma. L'export di una persona scarica ciò che Nesso ha scritto su quel contatto e su quell'azienda, salta i campi password, e non chiude né cancella. I test sono nella classe `ListinoPdfFasePrivacy` e nei giri `il pdf`, `l'ordine` e `l'export`.
+
+### Accensione, 19 ottobre 2026
+
+Un piano ordina integrazioni già salvate. Il gradino successivo si riattiva solo se il precedente è stato confermato dopo la sua anteprima, e non si accende da solo. Un'integrazione fuori dal piano si mette in pausa e si riattiva come prima. Una finestra di silenzio, per una integrazione o per tutte, non scrive in quei giorni: il file resta dov'è. Finita la finestra non parte da solo: si conferma, e allora scrive, oppure si scarta in `scartati/` senza toccare Espo. Senza finestre e senza piano il giro è quello di prima. I test sono nelle classi `FinestraEPiano` e nei giri `la finestra`, `dopo la finestra`, `scartare`, `il piano`.
+
 ### Mattina, 19 ottobre 2026
 
 In home, la percentuale di anagrafiche allineate e l'ora dell'ultimo giro riuscito sull'integrazione verso Account. Un giro già segnato `ok`, con righe invariate, conta anche se è stato eseguito prima che esistesse il campo dell'ultimo successo. Se il giro di oggi fallisce, non si mostra la percentuale e l'ora di ieri non viene presentata come oggi. Quadratura fra chiavi in sorgente e chiavi già in Espo, con lo scarto importi se c'è un campo valuta o decimale: è un controllo, non scrive. Per un file, un'ora entro cui è atteso: passato quel momento senza un giro riuscito la home è rossa, e un file già in `elaborati/` non viene riletto. Sulla scheda Espo, il campo Origine Nesso dice se l'ultimo aggiornamento è del gestionale o di una persona. I test delle quattro funzioni sono nelle classi `Mattina`, `QuadraturaNumeri`, `FileAtteso` e `Badge`.
@@ -104,7 +120,6 @@ Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. 
 
 ### Dati e visibilità
 
-- Chiave di più colonne. Oggi dalla pagina è una sola.
 - Più padri: «prima le aziende e le sedi, poi la rubrica». Oggi se ne indica uno solo.
 - Coda di ritento con attesa crescente, per l'uscita muta e per la riga il cui padre non è ancora arrivato.
 - In uscita il collegamento parte come chiave esterna, non come id Espo.
