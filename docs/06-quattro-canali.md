@@ -51,17 +51,17 @@ La query è rifiutata se:
 Il motore non esegue il testo così com'è. Lo avvolge:
 
 ```sql
-SELECT * FROM ( {query} ) AS sorgente LIMIT {n}
+SELECT * FROM ( {query} ) AS sorgente LIMIT {n} OFFSET {scostamento}
 ```
 
-`n` è 5 durante il salvataggio, 500 durante l'esecuzione, 5 nella prova a secco. Se l'integrazione ha una colonna di variazione, la SELECT è ordinata per quella colonna e per la colonna identità, e il giro dopo riparte dall'ultimo valore letto, anche se è uguale, usando l'identità come spareggio. I nomi colonna sono solo lettere, cifre e trattino basso. Il salvataggio fallisce se l'host non risponde, se l'utente non ha il permesso, o se la query è invalida. Se risponde, la API restituisce `columns` e le salva nel collegamento, così il passo di abbinamento le propone. La connessione usa `connect_timeout` 8 secondi e `read_timeout` 30. Cursore dizionario. Ogni valore non nullo diventa stringa.
+`n` è 5 durante il salvataggio e nella prova a secco. In esecuzione le pagine sono da 200 e si continua finché la pagina non è corta: non c'è il tetto di 500. Se l'integrazione ha una colonna di variazione, la SELECT è ordinata per quella colonna e per la colonna identità, e il giro dopo riparte dall'ultimo valore letto, anche se è uguale, usando l'identità come spareggio. I nomi colonna sono solo lettere, cifre e trattino basso. Il salvataggio fallisce se l'host non risponde, se l'utente non ha il permesso, o se la query è invalida. Se risponde, la API restituisce `columns` e le salva nel collegamento, così il passo di abbinamento le propone. La connessione usa `connect_timeout` 8 secondi e `read_timeout` 30. Cursore dizionario. Ogni valore non nullo diventa stringa.
 
 Non c'è un parser SQL oltre la regex iniziale. Una SELECT che contiene la parola insert in una stringa passa. Una seconda istruzione no, perché il punto e virgola è vietato. `INSERT`, `UPDATE`, `DELETE` a inizio testo no.
 
-Esecuzione: legge fino a 500 righe, ingest per riga, prosegue dopo l'errore. Dettaglio:
+Esecuzione: legge tutte le pagine, ingest per riga, prosegue dopo l'errore. Dettaglio:
 
 ```text
-{n} righe dal database, {c} create, {u} aggiornate, {i} invariate, {f} scartate. {primo errore}
+{n} righe dal database, {c} create, {u} aggiornate, {chiuse} chiuse, {i} invariate, {f} scartate
 ```
 
 Lo stato è `errore` solo quando ci sono scarti e non c'è nessuna riga creata, aggiornata o invariata. Ogni scarto resta nella tabella `scarto`.
@@ -96,13 +96,13 @@ Lettura:
 - encoding `utf-8-sig`, quindi un BOM in testa non diventa parte del primo nome colonna
 - `csv.DictReader`: la prima riga è l'intestazione
 - chiavi `None` (colonne in più senza nome) vengono tolte
-- una cella vuota resta stringa vuota, e in ingresso un campo mappato vuoto non si scrive
+- una cella vuota resta stringa vuota. Se il padrone del campo è la sorgente, quella cella svuota il campo su Espo. Se il padrone è Espo, il contrasto va in coda e il campo non si tocca
 
-Il separatore è la virgola, oppure il punto e virgola se nella prima riga i punti e virgola sono di più. Una riga che fallisce va in `scarto` e le altre continuano. A fine giro ogni file letto viene rinominato in `elaborati/{AAAAMMGGHHMMSS}-{nome}`, anche se qualche riga è stata scartata. Così il file non resta bloccato sulla stessa riga.
+Il separatore è la virgola, oppure il punto e virgola se nella prima riga i punti e virgola sono di più. Una riga che fallisce va in `scarto` e le altre continuano. A fine giro ogni file letto viene rinominato in `elaborati/{AAAAMMGGHHMMSS}-{nome}`, anche se qualche riga è stata scartata. Se manca una colonna obbligatoria, fra cui la colonna identità, quel file non si sposta e lo scarto è uno solo: «manca la colonna …».
 
 Nella prova: `scambio/file-notturno/elaborati/20261017105401-contatti.csv`, una riga, contatto Sara Verdi, id esterno `CNT-20`, integrazione `file-notturno-verso-contatti`.
 
-Un CSV senza la colonna identificativa fallisce su ogni riga e non viene spostato, se la prima riga alza prima del ciclo di rename. Il file resta lì e il giro dopo riprova.
+Un CSV senza una colonna obbligatoria, compresa quella identificativa, produce un solo scarto «manca la colonna …» e non viene spostato. Il giro dopo riprova. I file già in `elaborati/` non si rileggono. Se l'integrazione ha un'ora «atteso entro» e a quell'ora non c'è un giro riuscito di oggi, la home è rossa e il giornale registra l'assenza una volta al giorno.
 
 ## HTTP in uscita
 

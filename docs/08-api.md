@@ -54,6 +54,10 @@ Lo usa la pagina a ogni refresh. Contiene:
 | `queue` | ultimi 30 ingressi, `updated_at` discendente |
 | `sink` | ultimi 20 record letti in uscita |
 | `deliveries` | ultime 20 consegne, id discendente |
+| `morning` | percentuale delle anagrafiche, tono e frase. `percent` è nullo se oggi non c'è un giro riuscito |
+| `alerts` | frasi della quadratura rossa e del file atteso non elaborato |
+
+Su ogni integrazione in ingresso da CSV, `balance` è la quadratura e `file_alert` è 1 se il file atteso non è ancora stato elaborato oggi. `expectAt` si salva con l'integrazione, accanto a `scheduleAt`.
 
 ## POST /api/connections
 
@@ -190,8 +194,8 @@ Corpo facoltativo `{"withDependencies": true}`. Se è vero, prima parte l'integr
 | nessuno, uscita | il risultato di pull: `exported`, `cursor`, `records` |
 | nessuno, ingresso | 400 «collega un sistema esterno prima di eseguire» |
 | webhook | `{"waiting": true, "url": "..."}` |
-| database | `{"rows": 3, "created": 2, "updated": 0, "failed": 1}` |
-| csv | `rows`, `created`, `updated`, `unchanged`, `failed` |
+| database | `rows`, `created`, `updated`, `unchanged`, `closed`, `failed`, `status` |
+| csv | `rows`, `created`, `updated`, `unchanged`, `closed`, `failed`, `status` |
 | http | `{"sent": 3, "url": "...", "failed": false}` |
 
 409 di concorrenza sul lucchetto: 400 «un'esecuzione è già in corso». Anche in quel caso, se l'eccezione esce da `run_pipeline`, `mark_run` segna errore. Il `finally` rilascia il lucchetto.
@@ -199,6 +203,34 @@ Corpo facoltativo `{"withDependencies": true}`. Se è vero, prima parte l'integr
 ## POST /api/pipelines/{id}/dry
 
 Legge al massimo cinque righe e restituisce `rows`, ognuna con `mapped` oppure `status: scartato`. Non scrive su Espo. Un lookup mancante con politica «crea» compare come `nuovo:valore` e il record non nasce. Il webhook risponde che non ha righe da leggere.
+
+## POST /api/pipelines/{id}/anteprima
+
+Conta il giro intero senza scrivere: create, aggiornate, chiuse, scartate, e `pericolose` con il valore di oggi e quello in arrivo. Non sposta i CSV e non avanza il cursore.
+
+## POST /api/pipelines/{id}/lettura
+
+`{"enabled": true, "hours": 48}` accende la modalità lettura. Alla scadenza non si passa da soli alla scrittura: si esce con `{"enabled": false}`.
+
+## POST /api/pipelines/{id}/annulla
+
+Ripristina i campi scritti dall'ultimo giro, solo se nessuno li ha cambiati dopo. Risposta `restored` e `kept`.
+
+## POST /api/pipelines/{id}/chiusure
+
+Conferma la prima chiusura dei record spariti dalla sorgente e li chiude. Senza uno stato sulla scheda risponde 400.
+
+## POST /api/scritture
+
+`{"enabled": false}` ferma ogni scrittura verso Espo. L'anteprima e la prova a secco restano.
+
+## POST /api/connections/{id}/campione
+
+Le prime tre righe del CSV o del database, per l'abbinamento.
+
+## POST /api/watch/{id}
+
+`{"keep": "espo"}` lascia il valore attuale. `{"keep": "sorgente"}` scrive quello in arrivo.
 
 ## POST /api/pipelines/{id}/enabled
 

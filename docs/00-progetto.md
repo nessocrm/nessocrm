@@ -21,8 +21,8 @@ Un **collegamento** è il canale. Un'**integrazione** è la regola: quale colleg
 | Canale | Verso | Comportamento già in funzione |
 |---|---|---|
 | Webhook | entra in Espo | Indirizzo con token. Corpo oggetto, elenco, oppure `{records:[]}` |
-| Database | entra in Espo | Una SELECT su MySQL o MariaDB, al massimo 500 righe. Il motore non scrive su quel database |
-| File CSV | entra in Espo | Cartella `scambio/{id}`, UTF-8, virgola o punto e virgola. Dopo il giro il file va in `elaborati/`, anche se qualche riga è scartata |
+| Database | entra in Espo | Una SELECT su MySQL o MariaDB, letta a pagine da 200 fino in fondo. Il motore non scrive su quel database |
+| File CSV | entra in Espo | Cartella `scambio/{id}`, UTF-8, virgola o punto e virgola. Dopo il giro il file va in `elaborati/`, anche se qualche riga è scartata. Se manca una colonna obbligatoria il file resta dov'è |
 | HTTP | esce da Espo | POST JSON verso un indirizzo, oppure verso la casella locale. Si può aggiungere Bearer, utente e password, o un'intestazione |
 
 La scheda non è scritta nel codice. Nesso legge il metadata di Espo e propone le schede con tab e i campi scrivibili.
@@ -33,7 +33,7 @@ L'identità di un record in ingresso è `{id integrazione}:{valore esterno}`. Su
 
 L'uscita ricorda l'ultimo `modifiedAt` insieme all'id Espo. Un giro legge a pagine da 50, senza saltare i record che hanno lo stesso istante. Il cursore dell'invio HTTP avanza solo dopo i POST riusciti: quello che non è partito esce al giro dopo.
 
-La cadenza è manuale, 5 minuti, 15 minuti o un'ora. Un'integrazione può dichiarare quale altra deve partire prima. Si può mettere in pausa: il pianificatore e il webhook la saltano, «Esegui ora» no. L'interfaccia ha il menu laterale di Espo. Si crea e si modifica un'integrazione in quattro passi. Nell'abbinamento si copia un campo, si prende la prima parola o il resto, si scrive un valore fisso, si mappa un elenco, si collega una scheda, più record, oppure un'attività. Un telefono italiano viene messo in forma `+39`. La prova a secco mostra le prime righe senza scrivere su Espo. Attività elenca anche le righe scartate e gli ultimi giri. La configurazione si scarica e si ricarica, senza le password.
+La cadenza è manuale, 5 minuti, 15 minuti, un'ora, oppure un orario fisso. Un'integrazione può dichiarare quale altra deve partire prima. Si può mettere in pausa: il pianificatore e il webhook la saltano, «Esegui ora» no. Un interruttore ferma ogni scrittura verso Espo, e una modalità lettura fa lo stesso per una integrazione. L'interfaccia ha il menu laterale di Espo. Si crea e si modifica un'integrazione in quattro passi. Nell'abbinamento si copia un campo, si prende la prima parola o il resto, si scrive un valore fisso, si mappa un elenco, si collega una scheda, più record, un'attività, oppure si dice il team e la persona. Ogni campo ha un padrone. Un telefono italiano viene messo in forma `+39`. Una data si legge in tre formati. La prova a secco mostra le prime righe senza scrivere su Espo. L'anteprima conta il giro intero. Attività elenca anche le righe scartate, i contrasti e gli ultimi giri. La configurazione si scarica e si ricarica, senza le password.
 
 Ogni chiamata verso Espo usa le API HTTP, header `Espo-Authorization`. Creare una scheda, creare un campo, creare un lookup, leggere e scrivere un record: sono tutte API. Nesso non esegue SQL sulle tabelle di Espo.
 
@@ -56,6 +56,14 @@ Chiuse. Non sono più lavoro.
 ### Tubo, 18 ottobre 2026
 
 Giornale degli scarti. CSV e webhook che proseguono dopo una riga errata. CSV con punto e virgola, file spostato in `elaborati/` anche se qualche riga fallisce. Cursore in ingresso se si indica la colonna. Pagine in uscita. Cursore HTTP che avanza solo dopo l'invio riuscito. Un padre per integrazione. Lookup che può fallire, restare vuoto o creare il padre. Sul duplicato si scarta o si adotta. Trasformazioni, mappa valori, telefono `+39`. Prova a secco, modifica, pausa. Credenziali sull'uscita HTTP. Scarico e ricarico della configurazione. Chiave tenuta nel motore per le schede che Espo non lascia personalizzare (team, cartelle, categorie, ruoli, modelli email).
+
+### Carico, 19 ottobre 2026
+
+Padrone del campo, con svuotamento solo sui campi della sorgente e coda se il padrone è Espo. Anteprima del giro intero e diff delle righe pericolose. Conferma della prima chiusura. Interruttore di ogni scrittura. Modalità lettura. Storico dei valori e annullamento del giro. Partita IVA o codice fiscale già presente, e controllo di forma. Pagine in ingresso senza il tetto di 500. Orario fisso. Qualità prima di Espo: date, elenchi, campo nominato nell'errore. Il file si ferma se manca una colonna obbligatoria. Tre valori veri accanto all'abbinamento. Riepilogo del giro con create, aggiornate, chiuse e scartate. Regola di visibilità. Chiusura del record sparito, solo su una scheda che ha già uno stato e solo dopo la conferma la prima volta. I test stanno in `motore/test_carico.py` e `motore/test_giro.py`.
+
+### Mattina, 19 ottobre 2026
+
+In home, la percentuale di anagrafiche allineate e l'ora dell'ultimo giro riuscito sull'integrazione verso Account. Un giro già segnato `ok`, con righe invariate, conta anche se è stato eseguito prima che esistesse il campo dell'ultimo successo. Se il giro di oggi fallisce, non si mostra la percentuale e l'ora di ieri non viene presentata come oggi. Quadratura fra chiavi in sorgente e chiavi già in Espo, con lo scarto importi se c'è un campo valuta o decimale: è un controllo, non scrive. Per un file, un'ora entro cui è atteso: passato quel momento senza un giro riuscito la home è rossa, e un file già in `elaborati/` non viene riletto. Sulla scheda Espo, il campo Origine Nesso dice se l'ultimo aggiornamento è del gestionale o di una persona. I test delle quattro funzioni sono nelle classi `Mattina`, `QuadraturaNumeri`, `FileAtteso` e `Badge`.
 
 ### Prodotto e demo, 18 ottobre 2026
 
@@ -90,25 +98,8 @@ Il codice aperto le rispetta.
 
 Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. Le funzioni pensate per convincere un'azienda, distinte da questo elenco tecnico, stanno in [Adozione](15-adozione.md).
 
-### Prima di un carico vero
-
-Sono uscite il 18 ottobre sera, ragionando su che cosa un'azienda accetterebbe di accendere.
-
-- Padrone del campo. Di default la sorgente. Si può dire che un campo lo tiene Espo, così la nota del commerciale non sparisce al giro dopo. Lo svuotamento vale solo sui campi della sorgente.
-- Anteprima del giro intero, prima di scrivere: quante righe creerebbe, aggiornerebbe, chiuderebbe.
-- La prima chiusura si conferma. Non parte da sola.
-- Un interruttore ferma ogni scrittura verso Espo.
-- Pagine in ingresso. Il tetto di 500 righe sul database non regge un'anagrafica vera. Senza colonna di variazione oggi rilegge fino a quel tetto.
-- Orario fisso, per esempio le 02:10. Oggi la cadenza è solo manuale, 5, 15 o 60 minuti.
-- Se al file manca una colonna obbligatoria, si ferma il file. Non si scartano le righe una a una.
-- Qualità prima di Espo: partita IVA, data in più formati (`18/10/2026` e `2026-10-18`), valore di elenco che non esiste fra le opzioni.
-- In abbinamento, tre righe vere della sorgente accanto al campo Espo.
-- Riepilogo del giro in pagina: create, aggiornate, chiuse, scartate. Oggi c'è l'ultima frase, tagliata a 500 caratteri, e il giornale dei giri.
-
 ### Dati e visibilità
 
-- Regola «visibile a questo team» e «assegnata a questa persona». Oggi sono un lookup.
-- Chiudere il record sparito dalla sorgente, secondo la decisione sopra. Oggi non succede nulla.
 - Chiave di più colonne. Oggi dalla pagina è una sola.
 - Più padri: «prima le aziende e le sedi, poi la rubrica». Oggi se ne indica uno solo.
 - Coda di ritento con attesa crescente, per l'uscita muta e per la riga il cui padre non è ancora arrivato.
@@ -149,9 +140,5 @@ Sono uscite il 18 ottobre sera, ragionando su che cosa un'azienda accetterebbe d
 
 ### In che ordine
 
-1. Padrone del campo, anteprima del giro, conferma della prima chiusura, interruttore.
-2. Pagine in ingresso e orario fisso.
-3. Qualità prima di Espo, e il file che si ferma se manca una colonna.
-4. Visibilità, chiusura del record sparito, svuotamento solo sui campi della sorgente.
-5. Login, utente Espo dedicato, riepilogo, avviso.
-6. I canali, a partire da quello che il carico vero non riesce a leggere.
+1. Login, utente Espo dedicato, avviso.
+2. I canali, a partire da quello che il carico vero non riesce a leggere.

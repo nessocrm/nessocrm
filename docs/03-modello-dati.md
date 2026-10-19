@@ -25,6 +25,10 @@ Una riga è un'integrazione.
 | `cursor_column` | nullo | Colonna di variazione del database in ingresso |
 | `enabled` | default 1 | 0 mette in pausa pianificatore e webhook |
 | `on_duplicate` | default `fail` | `fail` scarta il simile con un'altra chiave. `adopt` lo aggiorna |
+| `last_success` | nullo | Ora dell'ultimo giro con almeno una riga entrata, aggiornata, invariata o chiusa. Un giro fallito non la sposta. Se è vuoto e l'ultimo giro è `ok` con righe allineate, la home usa `last_run` |
+| `expect_at` | nullo | Ora `HH:MM` entro cui un file è atteso. Passata quell'ora, senza successo oggi, `file_alert` diventa 1 |
+| `file_alert` | default 0 | 1 finché il file atteso non ha un giro riuscito |
+| `balance_json` | nullo | Ultima quadratura: conteggi, chiavi solo da una parte, scarto importi |
 
 Le sei colonne da `key_field` in poi non c'erano nella prima creazione. `init_db` le aggiunge con `ALTER` se `PRAGMA table_info` non le vede. Un file vecchio si apre ancora.
 
@@ -86,6 +90,10 @@ Una riga per ogni record che non è entrato o non è uscito. Non ha unicità: lo
 
 Un rigo per ogni giro, con esito e dettaglio. È lo stesso testo di `last_detail`, tenuto in coda. La pagina ne mostra gli ultimi venti.
 
+## setting, watch_item, field_history, presenza, pending_close
+
+`setting` tiene l'interruttore `writes`. `watch_item` è la coda dei contrasti. `field_history` è il valore precedente e quello scritto, per annullare un giro. `presenza` ricorda le chiavi viste, così un giro completo sa chi è sparito. `pending_close` elenca le chiavi della prima chiusura, in attesa di conferma. `badge_state` ricorda, per id Espo, se l'ultima origine è il gestionale o una persona, e fino a che `modifiedAt` risulta già visto. Cancellare l'integrazione cancella le righe legate al suo id. `badge_state` resta, perché è appeso al record Espo.
+
 ## delivery
 
 Diario dell'uscita e della casella. Non ha unicità. Una esecuzione che invia tre lead scrive tre righe `inviato`. La casella, ricevendo quei POST, scrive tre righe `ricevuto` con `pipeline_id` nullo.
@@ -139,7 +147,7 @@ Sono raggiungibili da `POST /api/ingest/modulo-web` e da `POST /api/pull/uscita-
 
 | Azione | Effetto |
 |---|---|
-| `DELETE /api/pipelines/{id}` | cancella la riga, `queue_item`, `sink_item`, `cursor_state` di quell'id. Non tocca Espo. I record creati nel CRM restano |
+| `DELETE /api/pipelines/{id}` | cancella la riga e le righe di coda, sink, cursore, scarti, giornale, contrasti, storico, presenza e chiusure in attesa di quell'id. Non tocca Espo. I record creati nel CRM restano |
 | `DELETE /api/connections/{id}` | mette `connection_id` a nullo sulle integrazioni che lo usavano, poi cancella il collegamento. Le integrazioni restano, senza canale. Un ingresso senza canale, alla prossima esecuzione, risponde che va collegato un sistema |
 
-Non c'è conferma nella pagina. Il click su Elimina parte subito.
+La pagina chiede conferma prima di eliminare.

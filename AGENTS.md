@@ -14,10 +14,10 @@ Il backup di produzione è un'altra cartella: `C:\Users\ndoni\Documents\bitbuket
 
 ## Documentazione
 
-Ogni modifica al prodotto, alla demo, alle API, all'interfaccia o al marchio aggiorna i docs nello stesso cambio.
+Ogni modifica al prodotto, alla demo, alle API, all'interfaccia o al marchio aggiorna i docs nello stesso cambio. Vale anche per un giro di issue: non si chiude il giro se i capitoli raccontano ancora il comportamento precedente.
 
-- Si aggiorna il capitolo che descrive già quel comportamento.
-- Se il comportamento è nuovo, si aggiunge un capitolo in `docs/`, lo si mette nella chiave `nav` di `mkdocs.yml` e nella tabella di `docs/index.md`.
+- Si aggiorna il capitolo che descrive già quel comportamento. Si rileggono le frasi vecchie (tetti, file che si spostano sempre, campi che non si svuotano, risposte di API senza i conteggi nuovi) e si correggono.
+- Una pagina nuova si crea solo se nessun capitolo parla di quella funzione. In quel caso si aggiunge in `docs/`, nella chiave `nav` di `mkdocs.yml` e nella tabella di `docs/index.md`.
 - I docs restano in italiano, in Markdown, e il build `py -3 -m mkdocs build --strict` deve passare. Niente link che escono da `docs/`: un file della root si cita per nome, non con un percorso relativo.
 - Il fatto e il non fatto restano in `docs/00-progetto.md`. Una cosa fatta si toglie dall'elenco di ciò che manca.
 - Il marchio sta in `assets/logo`. Se cambia il segno, si rilancia `py -3 scripts/build_logo.py` e si aggiorna `docs/14-marchio.md`.

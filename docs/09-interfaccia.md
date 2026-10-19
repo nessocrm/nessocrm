@@ -6,7 +6,7 @@ Il menu è una barra a sinistra, larga 232 pixel, la stessa forma del menu later
 
 | Indirizzo | Schermata |
 |---|---|
-| `#/` | Inizio. Titolo, stato di Espo, riquadri con i conteggi, pulsante per il passo successivo |
+| `#/` | Inizio. Titolo, stato di Espo, anagrafiche allineate, riquadri con i conteggi, pulsante per il passo successivo |
 | `#/schede` | Elenco delle schede di Espo, con il nome tecnico e le integrazioni che le toccano |
 | `#/schede/nuova` | Crea una scheda. Si indicano il singolare e il plurale |
 | `#/schede/{nome}` | Campi della scheda e modulo per aggiungerne uno: etichetta, tipo, valori se è un elenco, obbligo |
@@ -28,9 +28,16 @@ I quattro passi sono: nome e collegamento, scheda di Espo, abbinamento, cadenza 
 | Colleghiamo una scheda | Il valore identifica un record di un'altra scheda, e il legame è uno a uno |
 | Colleghiamo più record | Nella cella ci sono più valori, separati da virgola |
 | È un'attività appesa a una scheda | Il record è un'attività il cui padre è la scheda indicata |
+| Questa riga è di un team e di una persona | Il team e l'assegnatario arrivano da una colonna o da un team fisso. Un utente non si crea |
 
 In uscita la riga è più corta: un campo di Espo e il nome che riceve il sistema esterno.
 
-Sul campo si sceglie anche la trasformazione: copia, prima parola, resto del testo, valore fisso, mappa dei valori. Sul collegamento si sceglie che cosa fare se il record non c'è. L'ultimo passo ha la cadenza, l'integrazione da eseguire prima, la colonna di variazione del database, la politica sul duplicato e la casella «integrazione attiva».
+Sul campo si sceglie anche la trasformazione e il padrone: la sorgente, anche se la cella è vuota, oppure Espo. Sul collegamento si sceglie che cosa fare se il record non c'è. Accanto alle colonne compaiono tre valori veri del file o della query. L'ultimo passo ha la cadenza, l'orario fisso, l'integrazione da eseguire prima, la colonna di variazione del database, la politica sul duplicato e la casella «integrazione attiva».
+
+In home c'è l'interruttore delle scritture e il riquadro delle anagrafiche: percentuale solo se il giro di oggi verso Account è riuscito, altrimenti la frase dice che non c'è ancora un successo oppure che quello di oggi non è riuscito. Se la quadratura non torna, o un file atteso non è stato elaborato, il riquadro ha il bordo rosso. Sull'integrazione gli stessi numeri stanno sotto l'esito. L'ultimo passo ha anche «file atteso entro», per esempio 07:00.
+
+Sulla scheda Espo compare Origine Nesso: «aggiornato dal gestionale» con data e ora, oppure «ultimo ritocco di» seguito dal nome. Non è una colonna del file.
+
+Sull'integrazione: anteprima del giro, modalità lettura, annullamento, conferma delle chiusure. In Attività il riepilogo del giro, la coda da guardare e il giornale, compresa l'assenza del file.
 
 Sulla destinazione HTTP il modulo chiede l'autenticazione: nessuna, Bearer, utente e password, oppure un'intestazione.

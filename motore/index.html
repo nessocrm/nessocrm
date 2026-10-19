@@ -59,6 +59,8 @@
     .badge { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 3px; font-size: 12px; font-weight: 600; background: #eaeaea; color: #6a6a6a; white-space: nowrap; }
     .badge.ok { background: #cceed9; color: #246e43; }
     .badge.warn { background: #f9eabb; color: #9f7122; }
+    .badge.bad { background: #f8d0d0; color: #8a243c; }
+    .panel.bad { border-color: #e3b7c2; }
     .panel, .dashlet { background: #fff; border: 1px solid #e7eaed; border-radius: 4px; padding: 14px 16px; }
     .panel { margin-top: 12px; }
     .dashlets { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 8px; }
@@ -178,7 +180,7 @@
   </dialog>
   <script>
     const kindLabel = { webhook: "Webhook", database: "Database", csv: "File CSV", http: "Uscita HTTP" };
-    const phrases = { creato: "Creato in Espo", aggiornato: "Aggiornato", invariato: "Invariato", synced: "Sincronizzato", inviato: "Inviato", ricevuto: "Ricevuto", scartato: "Scartato", errore: "Errore", ok: "Riuscito" };
+    const phrases = { creato: "Creato in Espo", aggiornato: "Aggiornato", invariato: "Invariato", synced: "Sincronizzato", inviato: "Inviato", ricevuto: "Ricevuto", scartato: "Scartato", errore: "Errore", ok: "Riuscito", lettura: "Solo lettura", conferma: "Chiusure da confermare", "in coda": "In coda da guardare", mancante: "File atteso non arrivato" };
     const main = document.querySelector("#contenuto");
     const dialog = document.querySelector("#conferma");
     let catalog = [];
@@ -235,6 +237,11 @@
       const pipelines = state.pipelines || [];
       const espoText = health.espo === "raggiungibile" ? "Espo risponde." : "Espo non risponde ancora. Attendi il primo avvio e ricarica.";
       const badge = health.espo === "raggiungibile" ? `<span class="badge ok">Espo risponde</span>` : `<span class="badge warn">Espo non risponde</span>`;
+      const morning = state.morning || {};
+      const alerts = state.alerts || [];
+      const homeRed = morning.tone === "rosso" || alerts.length > 0;
+      const morningBadge = homeRed ? `<span class="badge bad">Da guardare</span>` : (morning.tone === "ok" ? `<span class="badge ok">Allineate</span>` : "");
+      const morningNumber = morning.percent == null ? "—" : morning.percent + "%";
       shell("Inizio", `
         <div class="page-header">
           <div class="page-title"><h1>Inizio</h1>${badge}</div>
@@ -244,6 +251,13 @@
           </div>
         </div>
         <p class="lead">${health.espo === "raggiungibile" ? "" : esc(espoText) + " "}Prima colleghi il sistema esterno. Poi scegli quale scheda di Espo riceve o manda i dati.</p>
+        <label class="panel"><input type="checkbox" id="writes" ${state.writesEnabled === false ? "" : "checked"}> Scritture verso Espo accese. Se le togli, i giri calcolano e non scrivono.</label>
+        <section class="panel ${homeRed ? "bad" : ""}">
+          <div class="page-title"><h2>Anagrafiche</h2>${morningBadge}</div>
+          <strong class="dashlet-count">${morningNumber}</strong>
+          <p>${esc(morning.text || "")}</p>
+          ${alerts.map(item => `<p>${esc(item)}</p>`).join("")}
+        </section>
         <div class="dashlets">
           <a class="dashlet" href="#/schede">
             <span class="dashlet-title">Schede</span>
@@ -271,6 +285,12 @@
           <p>Utente <strong>admin</strong>, password <strong>locale-admin</strong>. Vale solo per l'istanza su questo PC.</p>
         </details>
       `);
+      const writes = document.querySelector("#writes");
+      if (writes) writes.addEventListener("change", async () => {
+        await fetch("/api/scritture", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: writes.checked }) });
+        say(writes.checked ? "Le scritture sono accese." : "Le scritture verso Espo sono ferme.");
+        await refresh();
+      });
     }
 
     function connectionCard(item) {
@@ -408,10 +428,15 @@
         ${items.map(item => {
           const link = connectionOf(item.connection_id);
           const entity = entityOf(item.espo_entity);
-          const when = item.enabled === 0 ? "In pausa" : (item.schedule_minutes ? "Ogni " + item.schedule_minutes + " minuti" : "Solo a comando, oppure all'arrivo di un webhook");
+          const when = item.enabled === 0 ? "In pausa" : (item.schedule_at ? "Ogni giorno alle " + item.schedule_at : (item.schedule_minutes ? "Ogni " + item.schedule_minutes + " minuti" : "Solo a comando, oppure all'arrivo di un webhook"));
+          const counts = item.counts || {};
+          const summary = item.counts ? `${counts.created || 0} create, ${counts.updated || 0} aggiornate, ${counts.closed || 0} chiuse, ${counts.failed || 0} scartate${counts.held ? ", senza scrivere" : ""}` : "";
           const outcome = item.last_status === "errore" ? "Errore" : (item.last_run ? "Ultimo giro riuscito" : "Mai eseguita");
           const before = (state.pipelines || []).find(row => row.id === item.depends_on);
-          return `<article class="panel">
+          const balance = item.balance && item.balance.text ? item.balance.text : "";
+          const late = item.file_alert ? "File atteso, non ancora elaborato." : "";
+          const redCard = (item.balance && item.balance.ok === false) || item.file_alert;
+          return `<article class="panel ${redCard ? "bad" : ""}">
             <h2>${esc(item.name)}</h2>
             <dl>
               <dt>Verso</dt><dd>${item.direction === "in" ? "I dati entrano in Espo" : "I dati escono da Espo"}</dd>
@@ -419,11 +444,17 @@
               <dt>Collegamento</dt><dd>${esc(link ? link.name : "Nessuno")}</dd>
               <dt>Quando</dt><dd>${esc(when)}</dd>
               ${before ? `<dt>Prima</dt><dd>${esc(before.name)}</dd>` : ""}
-              <dt>Esito</dt><dd>${esc(outcome)}${item.last_detail ? ". " + esc(item.last_detail) : ""}</dd>
+              <dt>Esito</dt><dd>${esc(outcome)}${summary ? ". " + esc(summary) : ""}${item.read_only ? ". Modalità lettura" : ""}</dd>
+              ${balance ? `<dt>Quadratura</dt><dd>${esc(balance)}</dd>` : ""}
+              ${late ? `<dt>File</dt><dd>${esc(late)}</dd>` : ""}
             </dl>
             <div class="actions">
               <button type="button" data-run="${esc(item.id)}">Esegui ora</button>
               <button type="button" class="secondary" data-dry="${esc(item.id)}">Prova a secco</button>
+              <button type="button" class="secondary" data-preview="${esc(item.id)}">Anteprima del giro</button>
+              <button type="button" class="secondary" data-read="${esc(item.id)}" data-on="${item.read_only ? "1" : "0"}">${item.read_only ? "Esci dalla lettura" : "Modalità lettura"}</button>
+              <button type="button" class="secondary" data-undo="${esc(item.id)}">Annulla il giro</button>
+              ${item.last_status === "conferma" ? `<button type="button" data-close="${esc(item.id)}">Conferma le chiusure</button>` : ""}
               <a class="btn secondary" href="#/integrazioni/modifica/${esc(item.id)}/1">Modifica</a>
               <button type="button" class="secondary" data-pause="${esc(item.id)}" data-enabled="${item.enabled === 0 ? "0" : "1"}">${item.enabled === 0 ? "Riattiva" : "Metti in pausa"}</button>
               <button type="button" class="danger" data-del-p="${esc(item.id)}" data-name="${esc(item.name)}">Elimina</button>
@@ -443,6 +474,10 @@
       bindDelete();
       main.querySelectorAll("[data-run]").forEach(button => button.addEventListener("click", () => execute(button.dataset.run, true)));
       main.querySelectorAll("[data-dry]").forEach(button => button.addEventListener("click", () => dry(button.dataset.dry)));
+      main.querySelectorAll("[data-preview]").forEach(button => button.addEventListener("click", () => previewRun(button.dataset.preview)));
+      main.querySelectorAll("[data-read]").forEach(button => button.addEventListener("click", () => setReading(button.dataset.read, button.dataset.on !== "1")));
+      main.querySelectorAll("[data-undo]").forEach(button => button.addEventListener("click", () => undoRun(button.dataset.undo)));
+      main.querySelectorAll("[data-close]").forEach(button => button.addEventListener("click", () => confirmCloses(button.dataset.close)));
       main.querySelectorAll("[data-pause]").forEach(button => button.addEventListener("click", () => toggleEnabled(button.dataset.pause, button.dataset.enabled !== "1")));
       document.querySelector("#export-config").addEventListener("click", downloadConfig);
       document.querySelector("#import-config").addEventListener("change", importConfig);
@@ -478,7 +513,43 @@
         return;
       }
       const rows = data.rows || [];
-      box.textContent = data.detail || (rows.length ? rows.map(row => row.detail ? ("Scartata: " + row.detail) : JSON.stringify(row.mapped || row)).join(" · ") : "Nessuna riga da mostrare.");
+      const samples = (data.samples || []).map(item => item.from + ": " + (item.values || []).join(" | ")).join(" · ");
+      box.textContent = data.detail || (samples ? samples + ". " : "") + (rows.length ? rows.map(row => row.detail ? ("Scartata: " + row.detail) : JSON.stringify(row.mapped || row)).join(" · ") : "Nessuna riga da mostrare.");
+    }
+
+    async function previewRun(id) {
+      const box = main.querySelector(`[data-msg="${id}"]`);
+      box.textContent = "Anteprima in corso, senza scrivere su Espo.";
+      const response = await fetch("/api/pipelines/" + id + "/anteprima", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) { box.textContent = data.error || "Anteprima non riuscita."; return; }
+      const dangerous = (data.pericolose || []).map(item => item.field + " da " + item.today + " a " + item.incoming).join("; ");
+      box.textContent = (data.detail || "") + (dangerous ? " Righe pericolose: " + dangerous : "");
+    }
+
+    async function setReading(id, enabled) {
+      await fetch("/api/pipelines/" + id + "/lettura", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled, hours: 48 })
+      });
+      say(enabled ? "Modalità lettura per 48 ore. Alla scadenza la scrittura non parte da sola." : "Modalità lettura spenta.");
+      await refresh();
+    }
+
+    async function undoRun(id) {
+      const box = main.querySelector(`[data-msg="${id}"]`);
+      const response = await fetch("/api/pipelines/" + id + "/annulla", { method: "POST" });
+      const data = await response.json();
+      box.textContent = response.ok ? ("Ripristinati " + data.restored + " campi, lasciati " + data.kept + ".") : (data.error || "Annullamento non riuscito.");
+    }
+
+    async function confirmCloses(id) {
+      const box = main.querySelector(`[data-msg="${id}"]`);
+      const response = await fetch("/api/pipelines/" + id + "/chiusure", { method: "POST" });
+      const data = await response.json();
+      box.textContent = response.ok ? ("Chiuse " + data.closed + ".") : (data.error || "Conferma non riuscita.");
+      if (response.ok) await refresh();
     }
 
     async function toggleEnabled(id, enabled) {
@@ -515,15 +586,18 @@
     }
 
     function emptyRow() {
-      return { from: "", role: "field", to: "", lookupEntity: "", lookupBy: "", transform: "copy", constant: "", valueMap: "", onMiss: "fail" };
+      return { from: "", role: "field", to: "", lookupEntity: "", lookupBy: "", transform: "copy", constant: "", valueMap: "", onMiss: "fail", owner: "sorgente" };
     }
 
     function blankDraft() {
-      return { id: "", name: "", connectionId: "", entityMode: "existing", espoEntity: "", newSingular: "", newPlural: "", externalIdField: "", scheduleMinutes: "0", dependsOn: "", cursorColumn: "", enabled: true, onDuplicate: "fail", rows: [emptyRow()] };
+      return { id: "", name: "", connectionId: "", entityMode: "existing", espoEntity: "", newSingular: "", newPlural: "", externalIdField: "", scheduleMinutes: "0", scheduleAt: "", expectAt: "", dependsOn: "", cursorColumn: "", enabled: true, onDuplicate: "fail", rows: [emptyRow()], samples: null };
     }
 
     function draftFromPipeline(item) {
       const rows = (item.mapping || []).map(rule => {
+        if (rule.role === "visibility") {
+          return { from: "", role: "visibility", to: "visibility", lookupEntity: "", lookupBy: "", transform: "copy", constant: "", valueMap: "", onMiss: rule.onMiss || "skip", owner: "sorgente", teamFrom: rule.lookupEntity === "Team" && !rule.constValue ? rule.from : "", team: rule.constValue || "", assignFrom: rule.lookupEntity === "User" ? rule.from : "" };
+        }
         if (rule.transform === "lookups") {
           return { from: rule.from, role: "links", to: String(rule.to || "").replace(/Ids$/, ""), lookupEntity: rule.lookupEntity || "", lookupBy: rule.lookupBy || "", transform: "copy", constant: "", valueMap: "", onMiss: rule.onMiss || "fail" };
         }
@@ -540,7 +614,7 @@
           transform = "const";
         }
         const valueMap = rule.valueMap ? Object.entries(rule.valueMap).map(([key, value]) => key + "=" + value).join("\n") : "";
-        return { from: rule.from === "_const" ? "" : rule.from, role: "field", to: rule.to, lookupEntity: "", lookupBy: "", transform, constant, valueMap, onMiss: "fail" };
+        return { from: rule.from === "_const" ? "" : rule.from, role: "field", to: rule.to, lookupEntity: "", lookupBy: "", transform, constant, valueMap, onMiss: "fail", owner: rule.owner || "sorgente" };
       });
       return {
         id: item.id,
@@ -552,6 +626,8 @@
         newPlural: "",
         externalIdField: item.external_id_field || "",
         scheduleMinutes: String(item.schedule_minutes || 0),
+        scheduleAt: item.schedule_at || "",
+        expectAt: item.expect_at || "",
         dependsOn: item.depends_on || "",
         cursorColumn: item.cursor_column || "",
         enabled: item.enabled !== 0,
@@ -593,7 +669,21 @@
           document.querySelector("#new-entity").hidden = mode !== "new";
         });
       }
-      if (stepNumber === 3) bindMap(form);
+      if (stepNumber === 3) {
+        bindMap(form);
+        if (draft.connectionId) {
+          fetch("/api/connections/" + draft.connectionId + "/campione", { method: "POST" })
+            .then(response => response.json())
+            .then(data => {
+              const host = document.querySelector("#campione");
+              const rows = data.rows || [];
+              if (!host || !rows.length) return;
+              const names = Object.keys(rows[0]).slice(0, 6);
+              host.textContent = names.map(name => name + ": " + rows.slice(0, 3).map(row => row[name] || "").join(" | ")).join(" · ");
+            })
+            .catch(() => {});
+        }
+      }
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const error = readStep(stepNumber);
@@ -656,7 +746,7 @@
           <input name="externalIdField" value="${esc(draft.externalIdField)}" required autocomplete="off" list="colonne">
           <span class="hint">Lo stesso record, con lo stesso valore, aggiorna la scheda invece di crearne un'altra.</span>
         </label>`;
-      return `${identity}<div id="map-rows">${rows}</div><button type="button" class="secondary" id="add-row">Aggiungi un abbinamento</button>`;
+      return `${identity}<div id="campione" class="hint"></div><div id="map-rows">${rows}</div><button type="button" class="secondary" id="add-row">Aggiungi un abbinamento</button>`;
     }
 
     function mapFieldset(row, index, outbound) {
@@ -684,6 +774,7 @@
           <label><input type="radio" class="role" name="role-${index}" value="link" ${role === "link" ? "checked" : ""}> Colleghiamo una scheda</label>
           <label><input type="radio" class="role" name="role-${index}" value="links" ${role === "links" ? "checked" : ""}> Colleghiamo più record</label>
           <label><input type="radio" class="role" name="role-${index}" value="parent" ${role === "parent" ? "checked" : ""}> È un'attività appesa a una scheda</label>
+          <label><input type="radio" class="role" name="role-${index}" value="visibility" ${role === "visibility" ? "checked" : ""}> Questa riga è di un team e di una persona</label>
         </fieldset>
         <div class="as-field" ${role === "field" ? "" : "hidden"}>${fieldBlock}
           ${draft.entityMode === "new" ? "" : `<label>Trasformazione
@@ -693,6 +784,12 @@
               <option value="split_last" ${row.transform === "split_last" ? "selected" : ""}>Resto del testo</option>
               <option value="const" ${row.transform === "const" ? "selected" : ""}>Valore fisso</option>
               <option value="map" ${row.transform === "map" ? "selected" : ""}>Mappa dei valori</option>
+            </select>
+          </label>
+          <label>Padrone del campo
+            <select class="owner">
+              <option value="sorgente" ${(row.owner || "sorgente") === "sorgente" ? "selected" : ""}>La sorgente, anche se la cella è vuota</option>
+              <option value="espo" ${row.owner === "espo" ? "selected" : ""}>Espo: un valore diverso finisce in coda</option>
             </select>
           </label>
           <label class="as-const" ${row.transform === "const" ? "" : "hidden"}>Valore fisso <input class="constant" value="${esc(row.constant || "")}" autocomplete="off"></label>
@@ -710,6 +807,12 @@
           <label>Collegamento sulla scheda <select class="multi">${options(multi, "name", "label", row.to)}</select></label>
           <label>Campo con cui riconosciamo ogni record <select class="lookupBy">${options(fieldChoices(foreignName, false), "name", "label", row.lookupBy)}</select></label>
           <span class="hint">Nella cella possono esserci più valori, separati da virgola.</span>
+        </div>
+        <div class="as-visibility" ${role === "visibility" ? "" : "hidden"}>
+          <label>Colonna del team <input class="team-from" value="${esc(row.teamFrom || "")}" autocomplete="off" list="colonne"></label>
+          <label>Oppure team fisso <input class="team-const" value="${esc(row.team || "")}" autocomplete="off"></label>
+          <label>Colonna della persona <input class="assign-from" value="${esc(row.assignFrom || "")}" autocomplete="off" list="colonne"></label>
+          <span class="hint">La persona si cerca fra gli utenti già in Espo. Non ne nasce una nuova.</span>
         </div>
         <label class="as-miss" ${role === "field" ? "hidden" : ""}>Se il record collegato non c'è
           <select class="on-miss">
@@ -767,6 +870,14 @@
           ${outbound ? "" : `<dt>Identità</dt><dd>${esc(draft.externalIdField)}</dd>`}
           <dt>Abbinamenti</dt><dd>${draft.rows.length}</dd>
         </dl>
+        <label>Orario fisso, facoltativo
+          <input name="scheduleAt" value="${esc(draft.scheduleAt || "")}" placeholder="02:10" autocomplete="off">
+          <span class="hint">Se lo scrivi, il giro parte una volta al giorno a quell'ora. Esempio 02:10.</span>
+        </label>
+        <label>File atteso entro, facoltativo
+          <input name="expectAt" value="${esc(draft.expectAt || "")}" placeholder="07:00" autocomplete="off">
+          <span class="hint">Per un file. Se a quell'ora non è stato elaborato, la home diventa rossa. Esempio 07:00.</span>
+        </label>
         <label>Quando
           <select name="scheduleMinutes">
             ${Object.entries(when).map(([value, label]) => `<option value="${value}" ${String(draft.scheduleMinutes) === value ? "selected" : ""}>${label}</option>`).join("")}
@@ -840,6 +951,23 @@
           let to = typed ? typed.value.trim() : (chosen ? chosen.value : "");
           if (role === "link" || role === "parent") to = foreignSelect ? foreignSelect.value : "";
           if (role === "links") to = multi ? multi.value : "";
+          if (role === "visibility") {
+            return {
+              from: (row.querySelector(".team-from") || {}).value || (row.querySelector(".assign-from") || {}).value || "team",
+              role: "visibility",
+              to: "visibility",
+              teamFrom: row.querySelector(".team-from") ? row.querySelector(".team-from").value.trim() : "",
+              team: row.querySelector(".team-const") ? row.querySelector(".team-const").value.trim() : "",
+              assignFrom: row.querySelector(".assign-from") ? row.querySelector(".assign-from").value.trim() : "",
+              lookupEntity: "",
+              lookupBy: "",
+              transform: "copy",
+              constant: "",
+              valueMap: "",
+              onMiss: miss ? miss.value : "skip",
+              owner: "sorgente"
+            };
+          }
           return {
             from: ext.value.trim(),
             role,
@@ -849,7 +977,8 @@
             transform: transform ? transform.value : "copy",
             constant: (row.querySelector(".constant") || {}).value ? row.querySelector(".constant").value.trim() : "",
             valueMap: (row.querySelector(".value-map") || {}).value || "",
-            onMiss: miss ? miss.value : "fail"
+            onMiss: miss ? miss.value : "fail",
+            owner: (row.querySelector(".owner") || {}).value || "sorgente"
           };
         });
         if (!outbound && !draft.externalIdField) return "Indica la colonna che identifica il record.";
@@ -861,6 +990,8 @@
         draft.cursorColumn = form.cursorColumn ? form.cursorColumn.value.trim() : "";
         draft.onDuplicate = form.onDuplicate ? form.onDuplicate.value : "fail";
         draft.enabled = form.enabled.checked;
+        draft.scheduleAt = form.scheduleAt ? form.scheduleAt.value.trim() : "";
+        draft.expectAt = form.expectAt ? form.expectAt.value.trim() : "";
       }
       return "";
     }
@@ -878,7 +1009,10 @@
 
     async function savePipeline() {
       const outbound = selectedKind() === "http";
-      const mapping = draft.rows.filter(row => (row.from || row.transform === "const") && row.to).map(row => {
+      const mapping = draft.rows.filter(row => row.role === "visibility" || ((row.from || row.transform === "const") && row.to)).map(row => {
+        if (row.role === "visibility") {
+          return { role: "visibility", from: row.teamFrom || row.assignFrom || "team", teamFrom: row.teamFrom || "", team: row.team || "", assignFrom: row.assignFrom || "", onMiss: row.onMiss === "create" ? "skip" : (row.onMiss || "skip") };
+        }
         if (outbound) return { from: row.from, to: row.to, role: "field" };
         const transform = row.transform === "const" ? "const:" + (row.constant || "") : (row.transform || "copy");
         const valueMap = row.transform === "map" ? parseValueMap(row.valueMap) : undefined;
@@ -888,7 +1022,7 @@
         if (row.role === "links") {
           return { from: row.from, to: row.to, role: "links", lookupEntity: row.lookupEntity, lookupBy: row.lookupBy, onMiss: row.onMiss || "fail" };
         }
-        return { from: row.from, to: row.to, role: "field", transform, valueMap };
+        return { from: row.from, to: row.to, role: "field", transform, valueMap, owner: row.owner || "sorgente" };
       });
       const body = {
         id: draft.id || undefined,
@@ -900,6 +1034,8 @@
         newPlural: draft.newPlural,
         externalIdField: draft.externalIdField,
         scheduleMinutes: Number(draft.scheduleMinutes),
+        scheduleAt: draft.scheduleAt || "",
+        expectAt: draft.expectAt || "",
         dependsOn: draft.dependsOn,
         cursorColumn: draft.cursorColumn,
         enabled: draft.enabled !== false,
@@ -927,7 +1063,7 @@
       const runs = (state.runs || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(phrases[item.status] || item.status)}</td><td>${esc(item.detail || "")}</td><td>${esc(item.created_at)}</td></tr>`).join("") || `<tr><td colspan="4">Nessun giro.</td></tr>`;
       shell("Attività", `
         <div class="page-header"><h1>Attività</h1></div>
-        <p class="lead">Gli ultimi ingressi in Espo, le uscite e le righe che non sono entrate.</p>
+        <p class="lead">Gli ultimi ingressi in Espo, le uscite, le righe scartate e i valori da guardare.</p>
         <div class="panel table-wrap">
           <table>
             <caption>Ultimi passaggi</caption>
@@ -949,7 +1085,24 @@
             <tbody>${runs}</tbody>
           </table>
         </div>
+        <div class="panel table-wrap">
+          <table>
+            <caption>Da guardare</caption>
+            <thead><tr><th scope="col">Integrazione</th><th scope="col">Record</th><th scope="col">Campo</th><th scope="col">Oggi e in arrivo</th></tr></thead>
+            <tbody>${(state.watch || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(item.external_id || "")}</td><td>${esc(item.field_name)}</td><td>${esc(item.current_value || "")} → ${esc(item.incoming_value || "")} <button type="button" class="secondary" data-keep="espo" data-watch="${item.id}">Tieni Espo</button> <button type="button" data-keep="sorgente" data-watch="${item.id}">Prendi la sorgente</button></td></tr>`).join("") || `<tr><td colspan="4">Nessun contrasto.</td></tr>`}</tbody>
+          </table>
+        </div>
       `);
+      main.querySelectorAll("[data-watch]").forEach(button => button.addEventListener("click", async () => {
+        const response = await fetch("/api/watch/" + button.dataset.watch, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ keep: button.dataset.keep })
+        });
+        const data = await response.json();
+        say(response.ok ? "Scelta registrata." : (data.error || "Scelta non riuscita."));
+        if (response.ok) await refresh();
+      }));
     }
 
     function notFound() {

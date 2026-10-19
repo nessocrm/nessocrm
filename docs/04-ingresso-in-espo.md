@@ -33,7 +33,7 @@ Ogni regola legge `transform`.
 | `split_last` | tutto dopo il primo spazio. Una sola parola produce `None` e il campo non si scrive |
 | altro | errore «transform sconosciuto» |
 
-Una stringa vuota non viene scritta. Poi, se la chiave c'è e la scheda accetta il campo, il motore aggiunge `mapped[key_field] = chiave`, anche se l'abbinamento non cita quel campo. È il motivo per cui Giulia Costa ha `cExternalKey` pur mappando solo nome, cognome ed email. Se la scheda non è personalizzabile, la chiave non entra nel JSON: resta nella tabella `chiave`.
+Se il padrone del campo è la sorgente, una cella presente e vuota svuota quel campo. Se il padrone è Espo e il valore in arrivo è diverso da quello già scritto, il campo non si tocca e il contrasto finisce nella coda da guardare. Poi, se la chiave c'è e la scheda accetta il campo, il motore aggiunge `mapped[key_field] = chiave`, anche se l'abbinamento non cita quel campo. Una data si normalizza da `18/10/2026`, `2026-10-18` o `18-10-2026`. Un valore di elenco fuori dalle opzioni, o una partita IVA già usata da un'altra chiave, scarta la riga e nomina il campo. È il motivo per cui Giulia Costa ha `cExternalKey` pur mappando solo nome, cognome ed email. Se la scheda non è personalizzabile, la chiave non entra nel JSON: resta nella tabella `chiave`.
 
 Risultato mandato a Espo per quel lead:
 
@@ -47,6 +47,8 @@ Risultato mandato a Espo per quel lead:
 ```
 
 I numeri letti da MariaDB diventano stringhe prima di arrivare qui. Un intero `100` parte come `"100"`.
+
+Quando la scrittura parte, Nesso aggiunge da sé il campo Origine Nesso, con la data e l'ora del gestionale. Non arriva da una colonna. Se dopo quella scrittura una persona salva il record, il campo diventa «ultimo ritocco di» seguito dal suo nome. Un salvataggio fatto dall'utente con cui Nesso parla a Espo non conta come ritocco di una persona.
 
 ## Hash
 

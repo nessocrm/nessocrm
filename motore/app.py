@@ -16,8 +16,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import carico
 
 DB_PATH = Path(os.environ.get("DB_PATH", "/data/motore.sqlite"))
 ESPO_BASE = os.environ.get("ESPO_BASE_URL", "http://espocrm").rstrip("/")
@@ -138,10 +141,65 @@ def init_db() -> None:
             "cursor_column": "TEXT",
             "enabled": "INTEGER NOT NULL DEFAULT 1",
             "on_duplicate": "TEXT NOT NULL DEFAULT 'fail'",
+            "schedule_at": "TEXT",
+            "read_only": "INTEGER NOT NULL DEFAULT 0",
+            "read_until": "TEXT",
+            "close_confirmed": "INTEGER NOT NULL DEFAULT 0",
+            "close_field": "TEXT",
+            "close_value": "TEXT",
+            "last_counts": "TEXT",
+            "last_success": "TEXT",
+            "expect_at": "TEXT",
+            "file_alert": "INTEGER NOT NULL DEFAULT 0",
+            "balance_json": "TEXT",
         }
         for name, ddl in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE pipeline ADD COLUMN {name} {ddl}")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS setting (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS watch_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                external_id TEXT,
+                field_name TEXT NOT NULL,
+                current_value TEXT,
+                incoming_value TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS field_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                run_at TEXT NOT NULL,
+                espo_id TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                previous_value TEXT,
+                written_value TEXT
+            );
+            CREATE TABLE IF NOT EXISTS badge_state (
+                espo_id TEXT PRIMARY KEY,
+                modified_at TEXT,
+                author TEXT,
+                label TEXT
+            );
+            CREATE TABLE IF NOT EXISTS presenza (
+                pipeline_id TEXT NOT NULL,
+                external_key TEXT NOT NULL,
+                espo_id TEXT NOT NULL,
+                PRIMARY KEY (pipeline_id, external_key)
+            );
+            CREATE TABLE IF NOT EXISTS pending_close (
+                pipeline_id TEXT NOT NULL,
+                external_key TEXT NOT NULL,
+                PRIMARY KEY (pipeline_id, external_key)
+            );
+            """
+        )
+        conn.execute("INSERT OR IGNORE INTO setting (key, value) VALUES ('writes', '1')")
 
 
 def espo_request(method: str, path: str, body: dict | None = None, query: dict | None = None):
@@ -579,6 +637,8 @@ def resolve_lookup(rule: dict, value: str, dry: bool) -> str | None:
     if policy == "skip":
         return None
     if policy == "create":
+        if rule.get("neverCreate"):
+            return None
         if dry:
             return f"nuovo:{value}"
         return create_foreign(rule["lookupEntity"], rule["lookupBy"], value)
@@ -590,6 +650,8 @@ def resolve_lookup(rule: dict, value: str, dry: bool) -> str | None:
 def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: str, dry: bool = False) -> dict:
     mapped: dict = {}
     for rule in mapping:
+        if str(rule.get("to") or "").endswith("NessoBadge"):
+            continue
         if rule.get("transform") == "lookup":
             value = payload.get(rule["from"])
             if value is None or str(value).strip() == "":
@@ -602,7 +664,7 @@ def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: 
                 mapped["parentType"] = rule["parentType"]
             continue
         if rule.get("transform") == "lookups":
-            raw = str(payload.get(rule["from"]) or "")
+            raw = str(rule.get("constValue") or payload.get(rule["from"]) or "")
             parts = [part.strip() for part in re.split(r"[;,]", raw) if part.strip()]
             if not parts:
                 continue
@@ -626,6 +688,8 @@ def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: 
         value = apply_transform(rule, payload)
         if value is None or value == "":
             continue
+        if rule.get("kind") in ("date", "fiscale", "enum"):
+            value = carico.check_quality(value, rule.get("kind"), rule.get("options"), rule.get("to") or "")
         if rule.get("kind") == "bool":
             mapped[rule["to"]] = str(value).strip().lower() in {"1", "true", "si", "sì", "yes"}
         elif rule.get("kind") == "phone":
@@ -736,7 +800,138 @@ def upsert(
     return result["id"], action
 
 
-def ingest(pipeline_id: str, payload: dict) -> dict:
+def setting_value(key: str, default: str = "") -> str:
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM setting WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+def writes_held(row: sqlite3.Row) -> tuple[bool, str]:
+    read_only = bool(row["read_only"]) if "read_only" in row.keys() else False
+    enabled = setting_value("writes", "1") != "0"
+    return carico.reading(read_only, enabled)
+
+
+def record_fields(entity: str, espo_id: str | None, names: list[str]) -> dict:
+    if not espo_id or not names:
+        return {}
+    select = ",".join(["id", *names])
+    code, result = espo_request("GET", f"/api/v1/{entity}/{espo_id}", query={"select": select})
+    if code != 200 or not isinstance(result, dict):
+        return {}
+    return {name: result.get(name) for name in names}
+
+
+def find_fiscal(entity: str, field: str, value: str) -> str | None:
+    code, result = espo_request(
+        "GET",
+        f"/api/v1/{entity}",
+        query={
+            "select": f"id,{field}",
+            "maxSize": "1",
+            "where[0][type]": "equals",
+            "where[0][attribute]": field,
+            "where[0][value]": value,
+        },
+    )
+    if code != 200 or not isinstance(result, dict):
+        raise RuntimeError(f"ricerca fiscale HTTP {code}")
+    rows = result.get("list") or []
+    return rows[0]["id"] if rows else None
+
+
+def remember_watch(pipeline_id: str, external_id: str, watch: list[dict]) -> None:
+    if not watch:
+        return
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    with connect() as conn:
+        for item in watch:
+            conn.execute(
+                """
+                INSERT INTO watch_item
+                (pipeline_id, external_id, field_name, current_value, incoming_value, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (pipeline_id, external_id, item["field"], item["today"], item["incoming"], now),
+            )
+
+
+def remember_history(pipeline_id: str, run_at: str, espo_id: str, previous: dict, written: dict) -> None:
+    with connect() as conn:
+        for name, value in written.items():
+            if name.endswith("Ids") or name.endswith("Id"):
+                continue
+            before = "" if previous.get(name) is None else str(previous.get(name))
+            if before == str(value):
+                continue
+            conn.execute(
+                """
+                INSERT INTO field_history
+                (pipeline_id, run_at, espo_id, field_name, previous_value, written_value)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (pipeline_id, run_at, espo_id, name, before, str(value)),
+            )
+
+
+def remember_badge(espo_id: str, modified_at: str, author: str, label: str) -> None:
+    if not espo_id:
+        return
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO badge_state (espo_id, modified_at, author, label) VALUES (?, ?, ?, ?)
+            ON CONFLICT(espo_id) DO UPDATE SET
+                modified_at = excluded.modified_at,
+                author = excluded.author,
+                label = excluded.label
+            """,
+            (espo_id, modified_at, author, label),
+        )
+
+
+def remember_presence(pipeline_id: str, key: str, espo_id: str) -> None:
+    if not key or not espo_id:
+        return
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO presenza (pipeline_id, external_key, espo_id) VALUES (?, ?, ?)
+            ON CONFLICT(pipeline_id, external_key) DO UPDATE SET espo_id = excluded.espo_id
+            """,
+            (pipeline_id, key, espo_id),
+        )
+
+
+def governed_mapped(mapping: list[dict], payload: dict, mapped: dict, current: dict, creating: bool) -> tuple[dict, list[dict]]:
+    fields = []
+    for rule in mapping:
+        if rule.get("transform") in ("lookup", "lookups", "file"):
+            continue
+        source = str(rule.get("from") or "")
+        present = source in payload or str(rule.get("transform") or "").startswith("const:")
+        fields.append({
+            "to": rule["to"],
+            "owner": carico.owner_of(rule),
+            "present": present,
+            "value": mapped.get(rule["to"], ""),
+        })
+    write, watch = carico.plan_fields(fields, current, creating)
+    for rule in mapping:
+        if rule.get("transform") in ("lookup", "lookups", "file") and rule["to"] in mapped:
+            write[rule["to"]] = mapped[rule["to"]]
+    return write, watch
+
+
+def ingest(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
         if row is None:
@@ -750,47 +945,101 @@ def ingest(pipeline_id: str, payload: dict) -> dict:
         mapping = json.loads(row["mapping_json"])
         key_field = row["key_field"] or "cExternalKey"
         on_duplicate = row["on_duplicate"] if "on_duplicate" in row.keys() and row["on_duplicate"] else "fail"
-        mapped = map_payload(mapping, payload, key, key_field)
-        if scope_is_custom(row["espo_entity"]) and not mapped.get("name"):
-            mapped["name"] = external_id
-        digest = hashlib.sha256(json.dumps(mapped, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        previous = conn.execute(
-            "SELECT * FROM queue_item WHERE pipeline_id = ? AND external_id = ?",
-            (pipeline_id, external_id),
-        ).fetchone()
+        mapped = map_payload(mapping, payload, key, key_field, dry=hold)
+        existing_id = None
+        with connect() as conn:
+            previous = conn.execute(
+                "SELECT * FROM queue_item WHERE pipeline_id = ? AND external_id = ?",
+                (pipeline_id, external_id),
+            ).fetchone()
+        if previous and previous["espo_id"]:
+            existing_id = previous["espo_id"]
+        names = [rule["to"] for rule in mapping if rule.get("owner") == "espo"]
+        current = record_fields(row["espo_entity"], existing_id, names) if existing_id else {}
+        write, watch = governed_mapped(mapping, payload, mapped, current, existing_id is None)
+        if key and key_field:
+            write[key_field] = key
+        if scope_is_custom(row["espo_entity"]) and not write.get("name"):
+            write["name"] = external_id
+        for rule in mapping:
+            if rule.get("kind") == "fiscale" and write.get(rule["to"]):
+                found = find_fiscal(row["espo_entity"], rule["to"], write[rule["to"]])
+                if carico.fiscal_blocks_create(found, existing_id):
+                    raise RuntimeError(f"campo {rule['to']}: partita IVA o codice fiscale già presente")
+        digest = hashlib.sha256(json.dumps(write, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         now = time.strftime("%Y-%m-%d %H:%M:%S")
-        if previous and previous["hash"] == digest and previous["status"] == "synced":
+        would = carico.classify_row(existing_id is not None, {k: v for k, v in write.items() if k != key_field}, None, watch)
+        if previous and previous["hash"] == digest and previous["status"] == "synced" and not watch:
+            would = "invariato"
+        diffs = carico.dangerous_diffs(watch)
+        if hold or writes_held(row)[0]:
+            return {
+                "status": "lettura",
+                "would": would,
+                "espoId": existing_id,
+                "externalKey": key,
+                "entity": row["espo_entity"],
+                "diffs": diffs,
+            }
+        if would == "invariato":
+            remember_presence(pipeline_id, key, existing_id or previous["espo_id"])
             return {
                 "status": "invariato",
                 "espoId": previous["espo_id"],
                 "externalKey": key,
                 "entity": row["espo_entity"],
+                "diffs": diffs,
             }
+        if would == "in coda" and existing_id:
+            remember_watch(pipeline_id, external_id, watch)
+            remember_presence(pipeline_id, key, existing_id)
+            return {
+                "status": "in coda",
+                "espoId": existing_id,
+                "externalKey": key,
+                "entity": row["espo_entity"],
+                "diffs": diffs,
+            }
+        when = datetime.strptime(now, "%Y-%m-%d %H:%M:%S")
+        outgoing = dict(write)
+        badge_field = publish_field_name(row["espo_entity"], "nessoBadge")
+        try:
+            if scope_customizable(row["espo_entity"]):
+                ensure_field(row["espo_entity"], "nessoBadge", "Origine Nesso", 180)
+                show_on_layout(row["espo_entity"], [badge_field])
+        except Exception:
+            pass
+        outgoing[badge_field] = carico.badge_gestionale(when)
         espo_id, action = upsert(
             row["espo_entity"],
-            mapped,
-            previous["espo_id"] if previous else None,
+            outgoing,
+            existing_id,
             key_field,
             on_duplicate,
             key,
         )
-        conn.execute(
-            """
-            INSERT INTO queue_item
-            (pipeline_id, external_id, payload_json, mapped_json, hash, status, espo_id, detail, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'synced', ?, ?, ?)
-            ON CONFLICT(pipeline_id, external_id) DO UPDATE SET
-                payload_json = excluded.payload_json,
-                mapped_json = excluded.mapped_json,
-                hash = excluded.hash,
-                status = 'synced',
-                espo_id = excluded.espo_id,
-                detail = excluded.detail,
-                updated_at = excluded.updated_at
-            """,
-            (pipeline_id, external_id, json.dumps(payload, ensure_ascii=False), json.dumps(mapped, ensure_ascii=False), digest, espo_id, action, now),
-        )
-        return {"status": action, "espoId": espo_id, "externalKey": key, "entity": row["espo_entity"]}
+        remember_badge(espo_id, now, "gestionale", outgoing[badge_field])
+        remember_history(pipeline_id, now, espo_id, current, write)
+        remember_watch(pipeline_id, external_id, watch)
+        remember_presence(pipeline_id, key, espo_id)
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO queue_item
+                (pipeline_id, external_id, payload_json, mapped_json, hash, status, espo_id, detail, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'synced', ?, ?, ?)
+                ON CONFLICT(pipeline_id, external_id) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    mapped_json = excluded.mapped_json,
+                    hash = excluded.hash,
+                    status = 'synced',
+                    espo_id = excluded.espo_id,
+                    detail = excluded.detail,
+                    updated_at = excluded.updated_at
+                """,
+                (pipeline_id, external_id, json.dumps(payload, ensure_ascii=False), json.dumps(write, ensure_ascii=False), digest, espo_id, action, now),
+            )
+        return {"status": action, "espoId": espo_id, "externalKey": key, "entity": row["espo_entity"], "diffs": diffs}
 
 
 def espo_page(entity: str, select: str, where: list[tuple[str, str, str]], order_by: str) -> list:
@@ -941,17 +1190,236 @@ def pull(pipeline_id: str) -> dict:
     }
 
 
+def source_rows_of(pipeline: sqlite3.Row, link: sqlite3.Row | None) -> list[dict] | None:
+    if link is None:
+        return None
+    if link["kind"] == "csv":
+        folder = SCAMBIO / link["id"]
+        if not folder.is_dir() or not any(folder.glob("*.csv")):
+            return None
+        rows: list[dict] = []
+        for path in sorted(folder.glob("*.csv")):
+            _headers, file_rows = read_csv_file(path)
+            rows.extend(file_rows)
+        return rows
+    if link["kind"] == "database":
+        config = json.loads(link["config_json"])
+        return read_database(config)
+    return None
+
+
+def capture_balance(pipeline: sqlite3.Row, rows: list[dict]) -> dict:
+    mapping = json.loads(pipeline["mapping_json"])
+    amount = next((rule for rule in mapping if rule.get("kind") == "importo"), None)
+    source_keys: set[str] = set()
+    source_amount = 0.0 if amount else None
+    for payload in rows:
+        try:
+            source_keys.add(render_key(pipeline["key_template"], payload))
+        except Exception:
+            continue
+        if amount is not None and source_amount is not None:
+            source_amount += carico.parse_amount(payload.get(amount.get("from")))
+    with connect() as conn:
+        known = conn.execute(
+            "SELECT external_key, espo_id FROM chiave WHERE entity = ?",
+            (pipeline["espo_entity"],),
+        ).fetchall()
+        queued = conn.execute(
+            "SELECT external_id, mapped_json FROM queue_item WHERE pipeline_id = ?",
+            (pipeline["id"],),
+        ).fetchall()
+    prefix = pipeline["key_template"].split("{", 1)[0]
+    espo_keys = {row["external_key"] for row in known if str(row["external_key"]).startswith(prefix)}
+    espo_amount = None
+    if amount is not None:
+        espo_amount = 0.0
+        by_external = {row["external_id"]: row["mapped_json"] for row in queued}
+        for key in espo_keys:
+            external = key[len(prefix):] if key.startswith(prefix) else ""
+            raw = by_external.get(external)
+            if not raw:
+                continue
+            mapped = json.loads(raw)
+            espo_amount += carico.parse_amount(mapped.get(amount.get("to")))
+    result = carico.quadratura(source_keys, espo_keys, source_amount, espo_amount)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE pipeline SET balance_json = ? WHERE id = ?",
+            (json.dumps(result, ensure_ascii=False), pipeline["id"]),
+        )
+    return result
+
+
+def measure_balance(pipeline_id: str) -> dict | None:
+    with connect() as conn:
+        pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+        link = None
+        if pipeline and pipeline["connection_id"]:
+            link = conn.execute("SELECT * FROM connection WHERE id = ?", (pipeline["connection_id"],)).fetchone()
+    if pipeline is None or pipeline["direction"] != "in":
+        return None
+    rows = source_rows_of(pipeline, link)
+    if rows is None:
+        return None
+    return capture_balance(pipeline, rows)
+
+
+def folder_has_csv(connection_id: str) -> bool:
+    folder = SCAMBIO / connection_id
+    return folder.is_dir() and any(folder.glob("*.csv"))
+
+
+def notice_absent(now: datetime | None = None) -> list[str]:
+    moment = now or datetime.now()
+    day = moment.strftime("%Y-%m-%d")
+    noted: list[str] = []
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT pipeline.id, pipeline.name, pipeline.expect_at, pipeline.last_success, pipeline.connection_id
+            FROM pipeline
+            JOIN connection ON connection.id = pipeline.connection_id
+            WHERE connection.kind = 'csv' AND pipeline.expect_at IS NOT NULL AND pipeline.expect_at != ''
+            """
+        ).fetchall()
+    for row in rows:
+        state = carico.file_wait(moment, row["expect_at"], row["last_success"], folder_has_csv(row["connection_id"]))
+        with connect() as conn:
+            if state in ("mancante", "in_attesa"):
+                conn.execute("UPDATE pipeline SET file_alert = 1 WHERE id = ?", (row["id"],))
+            else:
+                conn.execute("UPDATE pipeline SET file_alert = 0 WHERE id = ?", (row["id"],))
+            if state == "mancante":
+                detail = f"file atteso entro le {row['expect_at']}, non arrivato"
+                already = conn.execute(
+                    """
+                    SELECT 1 FROM run_log
+                    WHERE pipeline_id = ? AND status = 'mancante' AND created_at LIKE ?
+                    """,
+                    (row["id"], day + "%"),
+                ).fetchone()
+                if already is None:
+                    conn.execute(
+                        "INSERT INTO run_log (pipeline_id, status, detail, created_at) VALUES (?, 'mancante', ?, ?)",
+                        (row["id"], detail, moment.strftime("%Y-%m-%d %H:%M:%S")),
+                    )
+                    noted.append(row["id"])
+    return noted
+
+
+def scan_person_badges() -> None:
+    with connect() as conn:
+        entities = [
+            row["espo_entity"]
+            for row in conn.execute(
+                "SELECT DISTINCT espo_entity FROM pipeline WHERE direction = 'in' AND espo_entity != ''"
+            )
+        ]
+    for entity in entities:
+        stamp = setting_value(f"badge_scan_{entity}", "1970-01-01 00:00:00")
+        try:
+            rows = espo_page(
+                entity,
+                "id,modifiedAt,modifiedByName",
+                [("after", "modifiedAt", stamp)],
+                "modifiedAt",
+            )
+        except Exception:
+            continue
+        apply_person_badges(entity, rows)
+        if rows:
+            last = max(str(row.get("modifiedAt") or "") for row in rows)
+            if last:
+                set_setting(f"badge_scan_{entity}", last[:19])
+
+
+def apply_person_badges(entity: str, records: list[dict], engine_names: set[str] | None = None) -> int:
+    names = engine_names or {"admin", "Admin"}
+    field = publish_field_name(entity, "nessoBadge")
+    changed = 0
+    for record in records:
+        espo_id = str(record.get("id") or "")
+        if not espo_id:
+            continue
+        with connect() as conn:
+            stored = conn.execute("SELECT modified_at FROM badge_state WHERE espo_id = ?", (espo_id,)).fetchone()
+        decision = carico.badge_decision(
+            stored["modified_at"] if stored else None,
+            record.get("modifiedAt"),
+            record.get("modifiedByName"),
+            names,
+        )
+        if decision != "persona":
+            continue
+        stamp = str(record.get("modifiedAt") or "")[:19]
+        when = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
+        text = carico.badge_persona(str(record.get("modifiedByName") or "").strip(), when)
+        code, _result = espo_request("PUT", f"/api/v1/{entity}/{espo_id}", {field: text})
+        if code not in (200, 201):
+            continue
+        remember_badge(espo_id, stamp, "persona", text)
+        changed += 1
+    return changed
+
+
+def registry_morning(pipelines: list[dict], now: datetime | None = None) -> dict:
+    moment = now or datetime.now()
+    rows = [item for item in pipelines if item.get("direction") == "in" and item.get("espo_entity") == "Account"]
+    if not rows:
+        return {"percent": None, "tone": "niente", "today": False, "text": "Nessuna integrazione di anagrafiche."}
+    source = aligned = 0
+    last_success = None
+    failed_today = False
+    today = moment.strftime("%Y-%m-%d")
+    for item in rows:
+        part_source, part_aligned = carico.alignment_counts(item.get("counts"))
+        source += part_source
+        aligned += part_aligned
+        stamp = carico.success_stamp(item.get("last_success"), item.get("last_run"), item.get("last_status"), item.get("counts"))
+        if stamp and (last_success is None or stamp > last_success):
+            last_success = stamp
+        ran_today = str(item.get("last_run") or "")[:10] == today
+        if ran_today and item.get("last_status") not in ("ok", "lettura", "conferma", None, ""):
+            failed_today = True
+    status = "errore" if failed_today else "ok"
+    return carico.morning_alignment(source, aligned, last_success, status, moment)
+
+
 def snapshot() -> dict:
+    notice_absent()
     with connect() as conn:
         pipelines = [dict(row) for row in conn.execute("SELECT * FROM pipeline ORDER BY direction, id")]
         for item in pipelines:
             item["mapping"] = json.loads(item.pop("mapping_json"))
+            raw_counts = item.get("last_counts")
+            item["counts"] = json.loads(raw_counts) if raw_counts else None
+            raw_balance = item.get("balance_json")
+            item["balance"] = json.loads(raw_balance) if raw_balance else None
+            item["file_alert"] = int(item.get("file_alert") or 0)
+        watch = [dict(row) for row in conn.execute("SELECT * FROM watch_item ORDER BY id DESC LIMIT 30")]
         queue = [dict(row) for row in conn.execute("SELECT * FROM queue_item ORDER BY updated_at DESC LIMIT 30")]
         sink = [dict(row) for row in conn.execute("SELECT * FROM sink_item ORDER BY id DESC LIMIT 20")]
         connections = [public_connection(row) for row in conn.execute("SELECT * FROM connection ORDER BY name")]
         deliveries = [dict(row) for row in conn.execute("SELECT * FROM delivery ORDER BY id DESC LIMIT 20")]
         rejects = [dict(row) for row in conn.execute("SELECT * FROM scarto ORDER BY id DESC LIMIT 30")]
         runs = [dict(row) for row in conn.execute("SELECT * FROM run_log ORDER BY id DESC LIMIT 20")]
+    kinds = {item["id"]: item["kind"] for item in connections}
+    for item in pipelines:
+        if item.get("direction") == "in" and kinds.get(item.get("connection_id")) == "csv":
+            try:
+                fresh = measure_balance(item["id"])
+            except Exception:
+                fresh = None
+            if fresh:
+                item["balance"] = fresh
+    alerts = []
+    for item in pipelines:
+        if item.get("file_alert"):
+            alerts.append(f"{item['name']}: il file atteso non è stato elaborato.")
+        balance = item.get("balance")
+        if isinstance(balance, dict) and balance.get("ok") is False:
+            alerts.append(f"{item['name']}: {balance.get('text')}")
     return {
         "state": STATE,
         "espoPublicUrl": ESPO_PUBLIC,
@@ -963,6 +1431,10 @@ def snapshot() -> dict:
         "deliveries": deliveries,
         "rejects": rejects,
         "runs": runs,
+        "watch": watch,
+        "writesEnabled": setting_value("writes", "1") != "0",
+        "morning": registry_morning(pipelines),
+        "alerts": alerts,
     }
 
 
@@ -1166,6 +1638,9 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
         source = str(rule.get("from") or "").strip()
         target = str(rule.get("to") or "").strip()
         role = rule.get("role") or "field"
+        if role == "visibility":
+            compiled.extend(carico.compile_visibility(rule))
+            continue
         transform = kept_transform(rule)
         if transform.startswith("const:"):
             source = source or "_const"
@@ -1241,11 +1716,23 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
             continue
         if target not in by_name or by_name[target].get("type") == "link":
             raise RuntimeError("campi Espo non riconosciuti: " + target)
-        item = {"from": source, "to": target, "transform": transform}
+        item = {"from": source, "to": target, "transform": transform, "owner": carico.owner_of(rule)}
+        if rule.get("required") in (True, 1, "1", "true", "si", "sì"):
+            item["required"] = True
+        label = chosen.get("label") or ""
         if chosen and chosen.get("type") == "bool":
             item["kind"] = "bool"
         elif chosen and chosen.get("type") == "phone":
             item["kind"] = "phone"
+        elif chosen and chosen.get("type") in ("date", "datetime", "datetimeOptional"):
+            item["kind"] = "date"
+        elif chosen and chosen.get("type") in ("currency", "float"):
+            item["kind"] = "importo"
+        elif carico.is_fiscal_field(target, label):
+            item["kind"] = "fiscale"
+        elif chosen and chosen.get("type") == "enum":
+            item["kind"] = "enum"
+            item["options"] = list(chosen.get("options") or [])
         mapped_values = kept_map(rule)
         if transform == "map" and mapped_values:
             item["valueMap"] = mapped_values
@@ -1316,6 +1803,12 @@ def save_pipeline(body: dict) -> dict:
     schedule = int(body.get("scheduleMinutes") or 0)
     if schedule not in (0, 5, 15, 60):
         raise RuntimeError("la cadenza può essere manuale, 5, 15 o 60 minuti")
+    schedule_at = str(body.get("scheduleAt") or "").strip()
+    if schedule_at:
+        carico._clock(schedule_at)
+    expect_at = str(body.get("expectAt") or "").strip()
+    if expect_at:
+        carico._clock(expect_at)
     connection_id = str(body.get("connectionId") or "").strip()
     on_duplicate = str(body.get("onDuplicate") or "fail")
     if on_duplicate not in ("fail", "adopt"):
@@ -1359,6 +1852,19 @@ def save_pipeline(body: dict) -> dict:
             cursor_column = previous["cursor_column"] or ""
         if "onDuplicate" not in body and previous is not None and previous["on_duplicate"]:
             on_duplicate = previous["on_duplicate"]
+        if "scheduleAt" not in body and previous is not None:
+            schedule_at = previous["schedule_at"] or ""
+        if "expectAt" not in body and previous is not None:
+            expect_at = previous["expect_at"] or ""
+        close_field = None
+        close_value = None
+        if direction == "in" and meta is not None:
+            choice = carico.close_field_of(
+                [field["name"] for field in meta["fields"]],
+                {field["name"]: field.get("options") or [] for field in meta["fields"]},
+            )
+            if choice:
+                close_field, close_value = choice
         if depends_on:
             if depends_on == pipeline_id:
                 raise RuntimeError("un'integrazione non può aspettare sé stessa")
@@ -1381,8 +1887,8 @@ def save_pipeline(body: dict) -> dict:
         conn.execute(
             """
             INSERT INTO pipeline
-            (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, schedule_minutes, depends_on, cursor_column, enabled, on_duplicate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, schedule_minutes, depends_on, cursor_column, enabled, on_duplicate, schedule_at, close_field, close_value, expect_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 direction = excluded.direction,
@@ -1396,12 +1902,17 @@ def save_pipeline(body: dict) -> dict:
                 depends_on = excluded.depends_on,
                 cursor_column = excluded.cursor_column,
                 enabled = excluded.enabled,
-                on_duplicate = excluded.on_duplicate
+                on_duplicate = excluded.on_duplicate,
+                schedule_at = excluded.schedule_at,
+                close_field = excluded.close_field,
+                close_value = excluded.close_value,
+                expect_at = excluded.expect_at
             """,
             (
                 pipeline_id, name, direction, entity, external_id_field, key_template,
                 json.dumps(clean, ensure_ascii=False), key_field, connection_id, schedule,
                 depends_on or None, cursor_column or None, enabled, on_duplicate,
+                schedule_at or None, close_field, close_value, expect_at or None,
             ),
         )
     return {"id": pipeline_id, "name": name, "direction": direction, "espoEntity": entity}
@@ -1417,6 +1928,10 @@ def delete_pipeline(pipeline_id: str) -> dict:
         conn.execute("DELETE FROM cursor_state WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM scarto WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM run_log WHERE pipeline_id = ?", (pipeline_id,))
+        conn.execute("DELETE FROM watch_item WHERE pipeline_id = ?", (pipeline_id,))
+        conn.execute("DELETE FROM field_history WHERE pipeline_id = ?", (pipeline_id,))
+        conn.execute("DELETE FROM presenza WHERE pipeline_id = ?", (pipeline_id,))
+        conn.execute("DELETE FROM pending_close WHERE pipeline_id = ?", (pipeline_id,))
         conn.execute("DELETE FROM pipeline WHERE id = ?", (pipeline_id,))
     return {"deleted": pipeline_id}
 
@@ -1472,14 +1987,27 @@ def remember_delivery(pipeline_id: str | None, connection_id: str | None, payloa
         )
 
 
-def mark_run(pipeline_id: str, status: str, detail: str) -> None:
+def mark_run(pipeline_id: str, status: str, detail: str, counts: dict | None = None) -> None:
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     text = detail[:500]
+    raw_counts = json.dumps(counts, ensure_ascii=False) if counts else None
+    productive = bool(counts) and any(counts.get(name) for name in ("created", "updated", "unchanged", "closed"))
     with connect() as conn:
-        conn.execute(
-            "UPDATE pipeline SET last_run = ?, last_status = ?, last_detail = ? WHERE id = ?",
-            (now, status, text, pipeline_id),
-        )
+        if raw_counts is None:
+            conn.execute(
+                "UPDATE pipeline SET last_run = ?, last_status = ?, last_detail = ? WHERE id = ?",
+                (now, status, text, pipeline_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE pipeline SET last_run = ?, last_status = ?, last_detail = ?, last_counts = ? WHERE id = ?",
+                (now, status, text, raw_counts, pipeline_id),
+            )
+        if status == "ok" and productive:
+            conn.execute(
+                "UPDATE pipeline SET last_success = ?, file_alert = 0 WHERE id = ?",
+                (now, pipeline_id),
+            )
         conn.execute(
             "INSERT INTO run_log (pipeline_id, status, detail, created_at) VALUES (?, ?, ?, ?)",
             (pipeline_id, status, text, now),
@@ -1506,35 +2034,53 @@ def remember_reject(pipeline_id: str, external_id: str, payload, detail: str) ->
         )
 
 
-def ingest_row(pipeline_id: str, payload: dict) -> dict:
+def ingest_row(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
     try:
-        return ingest(pipeline_id, payload)
+        return ingest(pipeline_id, payload, hold=hold)
     except Exception as error:
         external = ""
+        key = ""
         if isinstance(payload, dict):
             with connect() as conn:
                 row = conn.execute(
-                    "SELECT external_id_field FROM pipeline WHERE id = ?",
+                    "SELECT external_id_field, key_template FROM pipeline WHERE id = ?",
                     (pipeline_id,),
                 ).fetchone()
             if row is not None:
                 external = str(payload.get(row["external_id_field"]) or "")
+                try:
+                    key = render_key(row["key_template"], payload)
+                except Exception:
+                    key = ""
         remember_reject(pipeline_id, external, payload, str(error))
-        return {"status": "scartato", "detail": str(error), "externalKey": external}
+        return {"status": "scartato", "detail": str(error), "externalKey": key}
 
 
 def fresh_counts() -> dict:
-    return {"created": 0, "updated": 0, "unchanged": 0, "failed": 0, "first": ""}
+    return {
+        "created": 0, "updated": 0, "unchanged": 0, "failed": 0, "closed": 0,
+        "queued": 0, "held": False, "confirm": False, "first": "", "pericolose": [],
+    }
 
 
 def tally(item: dict, counts: dict) -> None:
     status = item.get("status")
+    if status == "lettura":
+        counts["held"] = True
+        status = item.get("would") or "invariato"
+    for diff in item.get("diffs") or []:
+        if len(counts["pericolose"]) < 20:
+            counts["pericolose"].append(diff)
     if status == "creato":
         counts["created"] += 1
     elif status == "aggiornato":
         counts["updated"] += 1
     elif status == "invariato":
         counts["unchanged"] += 1
+    elif status == "in coda":
+        counts["queued"] += 1
+    elif status == "chiuso":
+        counts["closed"] += 1
     else:
         counts["failed"] += 1
         if not counts["first"]:
@@ -1542,13 +2088,14 @@ def tally(item: dict, counts: dict) -> None:
 
 
 def finish_counts(prefix: str, counts: dict) -> tuple[str, str]:
-    detail = (
-        f"{prefix}, {counts['created']} create, {counts['updated']} aggiornate, "
-        f"{counts['unchanged']} invariate, {counts['failed']} scartate"
-    )
-    if counts["first"]:
-        detail += ". " + counts["first"]
-    worked = counts["created"] or counts["updated"] or counts["unchanged"]
+    detail = carico.summary_line(counts, prefix)
+    if counts.get("queued"):
+        detail += f", {counts['queued']} in coda"
+    worked = counts["created"] or counts["updated"] or counts["unchanged"] or counts["closed"] or counts["queued"]
+    if counts.get("confirm"):
+        return "conferma", detail
+    if counts.get("held"):
+        return "lettura", detail
     status = "errore" if counts["failed"] and not worked else "ok"
     return status, detail
 
@@ -1662,8 +2209,6 @@ def read_database(
     import pymysql
 
     sql = validate_select(config["query"])
-    if limit is None:
-        limit = 5 if sample else 500
     where = ""
     order = ""
     params: list[str] = []
@@ -1676,27 +2221,36 @@ def read_database(
             where = f"WHERE `{column}` > %s OR (`{column}` = %s AND `{identity}` > %s)"
             params = [stamp, stamp, last_id]
     source = sql.replace("%", "%%") if params else sql
-    wrapped = f"SELECT * FROM ({source}) AS sorgente {where} {order} LIMIT {int(limit)}"
-    connection = pymysql.connect(
-        host=config["host"],
-        port=int(config.get("port") or 3306),
-        user=config["user"],
-        password=config.get("password") or "",
-        database=config["database"],
-        connect_timeout=8,
-        read_timeout=30,
-        cursorclass=pymysql.cursors.DictCursor,
-    )
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(wrapped, params or None)
-            raw_rows = cursor.fetchall()
-    finally:
-        connection.close()
-    return [
-        {key: None if value is None else str(value) for key, value in row.items()}
-        for row in raw_rows
-    ]
+
+    def page(size: int, offset: int) -> list[dict]:
+        wrapped = (
+            f"SELECT * FROM ({source}) AS sorgente {where} {order} "
+            f"LIMIT {int(size)} OFFSET {int(offset)}"
+        )
+        connection = pymysql.connect(
+            host=config["host"],
+            port=int(config.get("port") or 3306),
+            user=config["user"],
+            password=config.get("password") or "",
+            database=config["database"],
+            connect_timeout=8,
+            read_timeout=30,
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(wrapped, params or None)
+                raw_rows = cursor.fetchall()
+        finally:
+            connection.close()
+        return [
+            {key: None if value is None else str(value) for key, value in row.items()}
+            for row in raw_rows
+        ]
+
+    if sample or limit is not None:
+        return page(5 if sample and limit is None else int(limit or 5), 0)
+    return carico.collect_pages(page, carico.PAGE_SIZE)
 
 
 def csv_delimiter(header: str) -> str:
@@ -1799,12 +2353,15 @@ def accept_hook(connection_id: str, token: str, body: dict | list) -> dict:
                 remember_reject(pipeline_id, "", {"valore": str(record)[:300]}, "la riga non è un oggetto")
                 tally({"status": "scartato", "detail": "la riga non è un oggetto"}, counts)
                 continue
-            item = ingest_row(pipeline_id, record)
+            with connect() as conn:
+                pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+            held = writes_held(pipeline)[0] if pipeline is not None else False
+            item = ingest_row(pipeline_id, record, hold=held)
             tally(item, counts)
             done.append(item)
         failed += counts["failed"]
         status, detail = finish_counts(f"{len(records)} record via webhook", counts)
-        mark_run(pipeline_id, status, detail)
+        mark_run(pipeline_id, status, detail, counts)
     return {"accepted": len(done) - failed, "failed": failed, "results": done}
 
 
@@ -1820,6 +2377,10 @@ def accept_inbox(connection_id: str, token: str, body: dict) -> dict:
 def pipeline_due(row: sqlite3.Row, now: float | None = None) -> bool:
     if row["enabled"] == 0:
         return False
+    schedule_at = row["schedule_at"] if "schedule_at" in row.keys() else None
+    if schedule_at:
+        moment = datetime.fromtimestamp(now if now is not None else time.time())
+        return carico.fixed_due(schedule_at, row["last_run"], moment)
     if not row["schedule_minutes"]:
         return not row["last_run"]
     if not row["last_run"]:
@@ -1879,7 +2440,123 @@ def dry_run(pipeline_id: str) -> dict:
             rows.append(preview_row(pipeline, payload))
         except Exception as error:
             rows.append({"status": "scartato", "detail": str(error)})
-    return {"rows": rows}
+    return {"rows": rows, "samples": column_samples(json.loads(pipeline["mapping_json"]), payloads)}
+
+
+def note_rows(pipeline_id: str, rows: list[dict], counts: dict, hold: bool) -> set[str]:
+    seen: set[str] = set()
+    for row in rows:
+        item = ingest_row(pipeline_id, row, hold=hold)
+        if item.get("externalKey"):
+            seen.add(item["externalKey"])
+        tally(item, counts)
+    return seen
+
+
+def column_samples(mapping: list[dict], payloads: list[dict]) -> list[dict]:
+    samples = []
+    for rule in mapping:
+        source = str(rule.get("from") or "")
+        if not source or source.startswith("_"):
+            continue
+        kind = rule.get("kind")
+        options = rule.get("options")
+        field = rule.get("to") or source
+
+        def interpret(raw, kind=kind, options=options, field=field):
+            if not str(raw or "").strip() or kind not in ("date", "fiscale", "enum"):
+                return raw
+            return carico.check_quality(raw, kind, options, field)
+
+        samples.append(carico.column_samples(
+            payloads,
+            source,
+            interpret if kind in ("date", "fiscale", "enum") else None,
+        ))
+    return samples
+
+
+def read_csv_file(path: Path) -> tuple[list[str], list[dict]]:
+    header = path.read_text(encoding="utf-8-sig").splitlines()[:1]
+    delimiter = csv_delimiter(header[0] if header else "")
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter=delimiter)
+        headers = [name.strip() for name in (reader.fieldnames or []) if name and str(name).strip()]
+        rows = [{key: value for key, value in row.items() if key} for row in reader]
+    return headers, rows
+
+
+def settle_closes(pipeline: sqlite3.Row, seen: set[str], counts: dict, full: bool, hold: bool, preview: bool = False) -> None:
+    if not full or pipeline["direction"] != "in":
+        return
+    with connect() as conn:
+        known_rows = conn.execute(
+            "SELECT external_key, espo_id FROM presenza WHERE pipeline_id = ?",
+            (pipeline["id"],),
+        ).fetchall()
+    known = {row["external_key"] for row in known_rows}
+    ids = {row["external_key"]: row["espo_id"] for row in known_rows}
+    missing = carico.disappeared(known, seen)
+    decision = carico.close_decision(
+        missing,
+        bool(pipeline["close_confirmed"]),
+        bool(pipeline["close_field"]),
+        bool(pipeline["cursor_column"]),
+    )
+    if decision["action"] == "conferma":
+        if not preview:
+            with connect() as conn:
+                conn.execute("DELETE FROM pending_close WHERE pipeline_id = ?", (pipeline["id"],))
+                for key in missing:
+                    conn.execute(
+                        "INSERT INTO pending_close (pipeline_id, external_key) VALUES (?, ?)",
+                        (pipeline["id"], key),
+                    )
+        counts["confirm"] = True
+        counts["wouldClose"] = len(missing)
+        listed = ", ".join(missing[:8])
+        counts["first"] = counts["first"] or f"{decision['reason']}: {listed}"
+        return
+    if decision["action"] == "salta" and decision["reason"] and missing:
+        counts["first"] = counts["first"] or decision["reason"]
+        return
+    if decision["action"] != "chiudi":
+        return
+    if hold:
+        counts["closed"] += len(missing)
+        counts["held"] = True
+        return
+    field = pipeline["close_field"]
+    value = pipeline["close_value"] or "Closed"
+    for key in missing:
+        espo_id = ids.get(key)
+        if not espo_id:
+            continue
+        code, _result = espo_request("PUT", f"/api/v1/{pipeline['espo_entity']}/{espo_id}", {field: value})
+        if code in (200, 201):
+            counts["closed"] += 1
+            with connect() as conn:
+                conn.execute(
+                    "DELETE FROM presenza WHERE pipeline_id = ? AND external_key = ?",
+                    (pipeline["id"], key),
+                )
+        else:
+            counts["failed"] += 1
+            if not counts["first"]:
+                counts["first"] = f"chiusura HTTP {code}"
+
+
+def run_result(rows: int, counts: dict, status: str) -> dict:
+    return {
+        "rows": rows,
+        "created": counts["created"],
+        "updated": counts["updated"],
+        "unchanged": counts["unchanged"],
+        "failed": counts["failed"],
+        "closed": counts["closed"],
+        "status": status,
+        "pericolose": counts["pericolose"],
+    }
 
 
 def execute_pipeline(pipeline_id: str) -> dict:
@@ -1903,6 +2580,7 @@ def execute_pipeline(pipeline_id: str) -> dict:
     if link["kind"] == "webhook":
         mark_run(pipeline_id, "ok", "in attesa che il sistema esterno chiami l'indirizzo")
         return {"waiting": True, "url": f"{PUBLIC_BASE}/hook/{link['id']}/{link['token']}"}
+    held = writes_held(pipeline)[0]
     if link["kind"] == "database":
         rows = read_database(
             config,
@@ -1911,33 +2589,51 @@ def execute_pipeline(pipeline_id: str) -> dict:
             id_column=pipeline["external_id_field"] if pipeline["cursor_column"] else None,
         )
         counts = fresh_counts()
-        for row in rows:
-            tally(ingest_row(pipeline_id, row), counts)
-        if pipeline["cursor_column"] and rows:
+        seen = note_rows(pipeline_id, rows, counts, held)
+        if pipeline["cursor_column"] and rows and not held:
             last = rows[-1]
             stamp = str(last.get(pipeline["cursor_column"]) or "")
             identity = str(last.get(pipeline["external_id_field"]) or "")
             if stamp:
                 save_cursor(pipeline_id, stamp, identity)
+        settle_closes(pipeline, seen, counts, full=not pipeline["cursor_column"], hold=held)
         status, detail = finish_counts(f"{len(rows)} righe dal database", counts)
-        mark_run(pipeline_id, status, detail)
-        return {"rows": len(rows), "created": counts["created"], "updated": counts["updated"], "unchanged": counts["unchanged"], "failed": counts["failed"]}
+        mark_run(pipeline_id, status, detail, counts)
+        return run_result(len(rows), counts, status)
     if link["kind"] == "csv":
-        rows = read_csv_folder(link["id"])
+        mapping = json.loads(pipeline["mapping_json"])
+        required = carico.required_columns(pipeline["external_id_field"], mapping)
+        folder = SCAMBIO / link["id"]
+        folder.mkdir(parents=True, exist_ok=True)
+        done = folder / "elaborati"
+        done.mkdir(exist_ok=True)
         counts = fresh_counts()
-        for _path, row in rows:
-            tally(ingest_row(pipeline_id, row), counts)
-        done = SCAMBIO / link["id"] / "elaborati"
-        done.mkdir(parents=True, exist_ok=True)
-        moved = set()
-        for path, _row in rows:
-            if path in moved or not path.exists():
+        seen: set[str] = set()
+        taken = 0
+        processed = 0
+        read_rows: list[dict] = []
+        for path in sorted(folder.glob("*.csv")):
+            headers, file_rows = read_csv_file(path)
+            missing = carico.missing_headers(headers, required)
+            if missing:
+                detail = "manca la colonna " + missing[0]
+                remember_reject(pipeline_id, "", {"file": path.name}, detail)
+                tally({"status": "scartato", "detail": detail}, counts)
                 continue
+            seen.update(note_rows(pipeline_id, file_rows, counts, held))
+            read_rows.extend(file_rows)
+            taken += len(file_rows)
             path.rename(done / f"{time.strftime('%Y%m%d%H%M%S')}-{path.name}")
-            moved.add(path)
-        status, detail = finish_counts(f"{len(rows)} righe dai file CSV", counts)
-        mark_run(pipeline_id, status, detail)
-        return {"rows": len(rows), "created": counts["created"], "updated": counts["updated"], "unchanged": counts["unchanged"], "failed": counts["failed"]}
+            processed += 1
+        settle_closes(pipeline, seen, counts, full=processed > 0 and not pipeline["cursor_column"], hold=held)
+        status, detail = finish_counts(f"{taken} righe dai file CSV", counts)
+        mark_run(pipeline_id, status, detail, counts)
+        if read_rows and not held:
+            try:
+                capture_balance(pipeline, read_rows)
+            except Exception:
+                pass
+        return run_result(taken, counts, status)
     if link["kind"] == "http":
         records = outbound_rows(pipeline_id)
         url = str(config.get("url") or "").strip() or f"http://127.0.0.1:{PORT}/inbox/{link['id']}/{link['token']}"
@@ -2001,6 +2697,216 @@ def run_pipeline(pipeline_id: str, with_dependencies: bool = False) -> dict:
         RUN_LOCK.release()
 
 
+def load_pipeline(pipeline_id: str) -> tuple:
+    with connect() as conn:
+        pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+        link = None
+        if pipeline and pipeline["connection_id"]:
+            link = conn.execute("SELECT * FROM connection WHERE id = ?", (pipeline["connection_id"],)).fetchone()
+    if pipeline is None:
+        raise KeyError(pipeline_id)
+    return pipeline, link
+
+
+def anteprima(pipeline_id: str) -> dict:
+    pipeline, link = load_pipeline(pipeline_id)
+    if link is None or link["kind"] == "webhook":
+        return {
+            "detail": "Il webhook non ha righe da leggere. L'anteprima si fa quando il sistema esterno chiama.",
+            "created": 0, "updated": 0, "closed": 0, "failed": 0, "unchanged": 0, "pericolose": [],
+        }
+    config = json.loads(link["config_json"])
+    counts = fresh_counts()
+    seen: set[str] = set()
+    full = False
+    if link["kind"] == "database":
+        rows = read_database(
+            config,
+            cursor_column=pipeline["cursor_column"],
+            cursor_value=load_cursor(pipeline_id) if pipeline["cursor_column"] else None,
+            id_column=pipeline["external_id_field"] if pipeline["cursor_column"] else None,
+        )
+        seen = note_rows(pipeline_id, rows, counts, True)
+        full = not pipeline["cursor_column"]
+        taken = len(rows)
+    elif link["kind"] == "csv":
+        required = carico.required_columns(pipeline["external_id_field"], json.loads(pipeline["mapping_json"]))
+        folder = SCAMBIO / link["id"]
+        taken = 0
+        processed = 0
+        if folder.is_dir():
+            for path in sorted(folder.glob("*.csv")):
+                headers, file_rows = read_csv_file(path)
+                missing = carico.missing_headers(headers, required)
+                if missing:
+                    tally({"status": "scartato", "detail": "manca la colonna " + missing[0]}, counts)
+                    continue
+                seen.update(note_rows(pipeline_id, file_rows, counts, True))
+                taken += len(file_rows)
+                processed += 1
+        full = processed > 0 and not pipeline["cursor_column"]
+    else:
+        raise RuntimeError("questo collegamento non ha un'anteprima")
+    settle_closes(pipeline, seen, counts, full=full, hold=True, preview=True)
+    _status, detail = finish_counts(f"{taken} righe in anteprima", counts)
+    return {
+        "detail": detail,
+        "created": counts["created"],
+        "updated": counts["updated"],
+        "closed": counts.get("wouldClose", counts["closed"]),
+        "unchanged": counts["unchanged"],
+        "failed": counts["failed"],
+        "pericolose": counts["pericolose"],
+        "confirm": counts["confirm"],
+    }
+
+
+def set_read_mode(pipeline_id: str, enabled: bool, hours: int = 48) -> dict:
+    load_pipeline(pipeline_id)
+    with connect() as conn:
+        if not enabled:
+            conn.execute("UPDATE pipeline SET read_only = 0, read_until = NULL WHERE id = ?", (pipeline_id,))
+            return {"id": pipeline_id, "readOnly": False}
+        until = carico.read_deadline(int(hours or 48), datetime.now())
+        conn.execute(
+            "UPDATE pipeline SET read_only = 1, read_until = ? WHERE id = ?",
+            (until, pipeline_id),
+        )
+    return {"id": pipeline_id, "readOnly": True, "until": until}
+
+
+def undo_last(pipeline_id: str) -> dict:
+    pipeline, _link = load_pipeline(pipeline_id)
+    held, reason = writes_held(pipeline)
+    if held:
+        raise RuntimeError(reason)
+    with connect() as conn:
+        latest = conn.execute(
+            "SELECT run_at FROM field_history WHERE pipeline_id = ? ORDER BY id DESC LIMIT 1",
+            (pipeline_id,),
+        ).fetchone()
+        rows = []
+        if latest:
+            rows = conn.execute(
+                "SELECT * FROM field_history WHERE pipeline_id = ? AND run_at = ?",
+                (pipeline_id, latest["run_at"]),
+            ).fetchall()
+    if not rows:
+        raise RuntimeError("non c'è un giro da annullare")
+    restored = 0
+    kept = 0
+    grouped: dict[str, list] = {}
+    for row in rows:
+        grouped.setdefault(row["espo_id"], []).append(row)
+    for espo_id, fields in grouped.items():
+        names = [field["field_name"] for field in fields]
+        current = record_fields(pipeline["espo_entity"], espo_id, names)
+        body = {}
+        for field in fields:
+            if carico.restorable(field["previous_value"] or "", field["written_value"] or "", current.get(field["field_name"])):
+                body[field["field_name"]] = field["previous_value"] or ""
+            else:
+                kept += 1
+        if not body:
+            continue
+        code, _result = espo_request("PUT", f"/api/v1/{pipeline['espo_entity']}/{espo_id}", body)
+        if code not in (200, 201):
+            raise RuntimeError(f"annullamento HTTP {code}")
+        restored += len(body)
+    return {"restored": restored, "kept": kept}
+
+
+def confirm_closes(pipeline_id: str) -> dict:
+    pipeline, _link = load_pipeline(pipeline_id)
+    held, reason = writes_held(pipeline)
+    if held:
+        raise RuntimeError(reason)
+    if not pipeline["close_field"]:
+        raise RuntimeError("la scheda non ha uno stato di chiusura")
+    with connect() as conn:
+        pending = conn.execute(
+            "SELECT external_key FROM pending_close WHERE pipeline_id = ?",
+            (pipeline_id,),
+        ).fetchall()
+        conn.execute("UPDATE pipeline SET close_confirmed = 1 WHERE id = ?", (pipeline_id,))
+    closed = 0
+    field = pipeline["close_field"]
+    value = pipeline["close_value"] or "Closed"
+    for row in pending:
+        with connect() as conn:
+            found = conn.execute(
+                "SELECT espo_id FROM presenza WHERE pipeline_id = ? AND external_key = ?",
+                (pipeline_id, row["external_key"]),
+            ).fetchone()
+        if found is None:
+            continue
+        code, _result = espo_request(
+            "PUT",
+            f"/api/v1/{pipeline['espo_entity']}/{found['espo_id']}",
+            {field: value},
+        )
+        if code not in (200, 201):
+            raise RuntimeError(f"chiusura HTTP {code}")
+        closed += 1
+        with connect() as conn:
+            conn.execute(
+                "DELETE FROM presenza WHERE pipeline_id = ? AND external_key = ?",
+                (pipeline_id, row["external_key"]),
+            )
+    with connect() as conn:
+        conn.execute("DELETE FROM pending_close WHERE pipeline_id = ?", (pipeline_id,))
+    return {"closed": closed}
+
+
+def connection_sample(connection_id: str) -> dict:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM connection WHERE id = ?", (connection_id,)).fetchone()
+    if row is None:
+        raise KeyError(connection_id)
+    if row["kind"] == "csv":
+        folder = SCAMBIO / connection_id
+        if not folder.is_dir():
+            return {"rows": []}
+        for path in sorted(folder.glob("*.csv")):
+            _headers, rows = read_csv_file(path)
+            return {"rows": rows[:3]}
+        return {"rows": []}
+    if row["kind"] == "database":
+        return {"rows": read_database(json.loads(row["config_json"]), limit=3)}
+    return {"rows": []}
+
+
+def resolve_watch(watch_id: int, keep: str) -> dict:
+    if keep not in ("espo", "sorgente"):
+        raise RuntimeError("si tiene il valore di Espo oppure quello in arrivo")
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM watch_item WHERE id = ?", (watch_id,)).fetchone()
+    if row is None:
+        raise KeyError(watch_id)
+    pipeline, _link = load_pipeline(row["pipeline_id"])
+    if keep == "sorgente":
+        held, reason = writes_held(pipeline)
+        if held:
+            raise RuntimeError(reason)
+        with connect() as conn:
+            found = conn.execute(
+                "SELECT espo_id FROM queue_item WHERE pipeline_id = ? AND external_id = ?",
+                (row["pipeline_id"], row["external_id"]),
+            ).fetchone()
+        if found is None or not found["espo_id"]:
+            raise RuntimeError("il record non è ancora in Espo")
+        code, _result = espo_request(
+            "PUT",
+            f"/api/v1/{pipeline['espo_entity']}/{found['espo_id']}",
+            {row["field_name"]: row["incoming_value"]},
+        )
+        if code not in (200, 201):
+            raise RuntimeError(f"scrittura HTTP {code}")
+    with connect() as conn:
+        conn.execute("DELETE FROM watch_item WHERE id = ?", (watch_id,))
+    return {"id": watch_id, "kept": keep}
+
+
 def set_enabled(pipeline_id: str, enabled: bool) -> dict:
     with connect() as conn:
         found = conn.execute("SELECT id FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
@@ -2028,6 +2934,8 @@ def export_config() -> dict:
             "cursorColumn": item.get("cursor_column"),
             "enabled": item.get("enabled", 1),
             "onDuplicate": item.get("on_duplicate") or "fail",
+            "scheduleAt": item.get("schedule_at") or "",
+            "expectAt": item.get("expect_at") or "",
             "mapping": item["mapping"],
         })
     return {"connections": current["connections"], "pipelines": pipelines}
@@ -2094,8 +3002,9 @@ def scheduler() -> None:
             with connect() as conn:
                 rows = conn.execute(
                     """
-                    SELECT id, schedule_minutes, last_run, enabled FROM pipeline
-                    WHERE schedule_minutes > 0 AND connection_id IS NOT NULL AND COALESCE(enabled, 1) = 1
+                    SELECT id, schedule_minutes, schedule_at, last_run, enabled FROM pipeline
+                    WHERE connection_id IS NOT NULL AND COALESCE(enabled, 1) = 1
+                      AND (schedule_minutes > 0 OR (schedule_at IS NOT NULL AND schedule_at != ''))
                     """
                 ).fetchall()
             for row in rows:
@@ -2105,6 +3014,11 @@ def scheduler() -> None:
                     run_pipeline(row["id"])
                 except Exception as error:
                     print("[motore] pianificazione", row["id"], error)
+            try:
+                notice_absent()
+                scan_person_badges()
+            except Exception as error:
+                print("[motore] pianificazione", error)
         except Exception as error:
             print("[motore] pianificazione", error)
 
@@ -2193,6 +3107,36 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "dry":
                 self.send_json(200, dry_run(parts[2]))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "anteprima":
+                self.send_json(200, anteprima(parts[2]))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "lettura":
+                body = self.read_json()
+                self.send_json(200, set_read_mode(
+                    parts[2],
+                    body.get("enabled") not in (False, 0, "0"),
+                    int(body.get("hours") or 48),
+                ))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "annulla":
+                self.send_json(200, undo_last(parts[2]))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "chiusure":
+                self.send_json(200, confirm_closes(parts[2]))
+                return
+            if len(parts) == 3 and parts[:2] == ["api", "watch"]:
+                body = self.read_json()
+                self.send_json(200, resolve_watch(int(parts[2]), str(body.get("keep") or "")))
+                return
+            if path == "/api/scritture":
+                body = self.read_json()
+                enabled = body.get("enabled") not in (False, 0, "0")
+                set_setting("writes", "1" if enabled else "0")
+                self.send_json(200, {"writesEnabled": enabled})
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "connections"] and parts[3] == "campione":
+                self.send_json(200, connection_sample(parts[2]))
                 return
             if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "enabled":
                 body = self.read_json()

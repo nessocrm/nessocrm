@@ -111,7 +111,7 @@ Universale, qui, ha un senso preciso.
 - Il database letto è MySQL o MariaDB, e solo in SELECT.
 - Il motore non scrive sul sistema sorgente.
 - Se Espo rifiuta un record perché ne esiste uno simile con un'altra chiave, la riga viene scartata, salvo che l'integrazione sia impostata per aggiornare quel record.
-- La cadenza ha quattro valori: 0, 5, 15, 60 minuti.
+- La cadenza ha quattro intervalli: 0, 5, 15, 60 minuti. In più si può indicare un orario fisso, per esempio 02:10.
 - Dalla pagina non si modifica un oggetto già creato. Si cancella e si ricrea. L'API, se riceve un id esistente, lo aggiorna.
 - Il modulo della pagina salva copia, prima parola, resto del testo, valore fisso e mappa dei valori.
 

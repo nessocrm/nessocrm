@@ -71,7 +71,7 @@ Un'integrazione in uscita non crea il campo. Se si abbina `cExternalKey` e il ca
 - in ingresso, colonna identificativa non vuota
 - almeno una coppia from/to entrambi non vuoti
 - ogni campo Espo (`to` in ingresso, `from` in uscita) appartiene ai campi del catalogo per quella scheda
-- cadenza 0, 5, 15 o 60
+- cadenza 0, 5, 15 o 60, oppure un orario fisso `scheduleAt` nel formato 02:10
 - se c'è un collegamento, esiste e il verso coincide col kind
 
 Il salvataggio conserva `copy`, `split_first`, `split_last`, `const:…`, `map` e `file`. Una mappa valori sta in `valueMap`. Un campo telefono riceve `kind: phone` e il numero italiano diventa `+39…`. Un collegamento ha `onMiss`: `fail`, `skip` o `create`. Risalvare un'integrazione non ricrea il lookup se verso quella scheda ne esiste già uno solo. La chiave `{id}:{colonna}` non viene riscritta se la colonna identità non cambia.
