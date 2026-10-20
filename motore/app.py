@@ -1206,7 +1206,7 @@ def espo_page(entity: str, select: str, where: list[tuple[str, str, str]], order
 
 
 def save_cursor(pipeline_id: str, stamp: str, last_id: str) -> None:
-    if not stamp:
+    if not stamp and not last_id:
         return
     with connect() as conn:
         conn.execute(
@@ -1229,6 +1229,7 @@ def load_cursor(pipeline_id: str) -> str:
 
 def collect_changes(entity: str, select: str, cursor_value: str, limit: int) -> list:
     stamp, last_id = split_cursor(cursor_value or "1970-01-01 00:00:00")
+    origin_stamp, origin_id = stamp, last_id
     records = []
     seen = set()
 
@@ -1236,6 +1237,8 @@ def collect_changes(entity: str, select: str, cursor_value: str, limit: int) -> 
         for item in items:
             espo_id = item.get("id")
             if not espo_id or espo_id in seen:
+                continue
+            if carico.skip_without_date(item.get("modifiedAt") or "", espo_id, origin_stamp, origin_id):
                 continue
             seen.add(espo_id)
             records.append(item)
@@ -1324,19 +1327,28 @@ def remember_sink(pipeline_id: str, espo_id: str, payload: dict) -> None:
         )
 
 
+def remember_outbound_cursor(pipeline_id: str, item: dict) -> bool:
+    stamp = item.get("modifiedAt") or ""
+    espo_id = item.get("espoId") or ""
+    if not stamp and not espo_id:
+        return False
+    save_cursor(pipeline_id, stamp, espo_id)
+    return not bool(stamp)
+
+
 def pull(pipeline_id: str) -> dict:
     records = outbound_rows(pipeline_id)
     last = None
     for item in records:
         remember_sink(pipeline_id, item["espoId"], item["payload"])
-        if item["modifiedAt"]:
+        if item.get("espoId") or item.get("modifiedAt"):
             last = item
-    if last:
-        save_cursor(pipeline_id, last["modifiedAt"], last["espoId"])
+    missing_date = remember_outbound_cursor(pipeline_id, last) if last else False
     cursor = join_cursor(last["modifiedAt"], last["espoId"]) if last else load_cursor(pipeline_id)
     return {
         "exported": len(records),
         "cursor": cursor,
+        "missingDate": missing_date,
         "records": [item["payload"] for item in records],
     }
 
@@ -1418,7 +1430,7 @@ def measure_balance(pipeline_id: str) -> dict | None:
 
 def folder_has_csv(connection_id: str) -> bool:
     folder = SCAMBIO / connection_id
-    return folder.is_dir() and any(folder.glob("*.csv"))
+    return folder.is_dir() and (any(folder.glob("*.csv")) or any(folder.glob("*.xlsx")))
 
 
 def notice_absent(now: datetime | None = None) -> list[str]:
@@ -1647,6 +1659,24 @@ def snapshot() -> dict:
             ORDER BY notice.id
             """
         )]
+        last_errors: dict[str, sqlite3.Row] = {}
+        for row in conn.execute(
+            "SELECT pipeline_id, created_at, detail FROM run_log WHERE status = 'errore' ORDER BY id DESC"
+        ):
+            if row["pipeline_id"] not in last_errors:
+                last_errors[row["pipeline_id"]] = row
+    moment = datetime.now()
+    for item in pipelines:
+        error = last_errors.get(item["id"])
+        item["pace"] = carico.run_pace(
+            moment,
+            item.get("schedule_at"),
+            int(item.get("schedule_minutes") or 0),
+            item.get("last_run"),
+            item.get("last_success"),
+            error["created_at"] if error else None,
+            error["detail"] if error else None,
+        )
     kinds = {item["id"]: item["kind"] for item in connections}
     for item in pipelines:
         if item.get("direction") == "in" and kinds.get(item.get("connection_id")) == "csv":
@@ -2097,7 +2127,12 @@ def save_pipeline(body: dict) -> dict:
             link = conn.execute("SELECT * FROM connection WHERE id = ?", (connection_id,)).fetchone()
             if link is None:
                 raise RuntimeError("collegamento non trovato")
-            expected = "out" if link["kind"] == "http" else "in"
+            if link["kind"] == "http":
+                expected = "out"
+            elif link["kind"] in ("sftp", "ftps"):
+                expected = direction
+            else:
+                expected = "in"
             if direction != expected:
                 raise RuntimeError("il collegamento e il verso non coincidono")
         else:
@@ -2280,6 +2315,9 @@ def public_connection(row: sqlite3.Row) -> dict:
     if config.get("password"):
         config["hasPassword"] = True
         config["password"] = ""
+    if config.get("tunnelPassword"):
+        config["hasTunnelPassword"] = True
+        config["tunnelPassword"] = ""
     if config.get("token"):
         config["hasToken"] = True
         config["token"] = ""
@@ -2451,18 +2489,39 @@ def save_connection(body: dict) -> dict:
     kind = body.get("kind")
     if not name:
         raise RuntimeError("manca il nome del collegamento")
-    if kind not in ("webhook", "database", "csv", "http", "pdf"):
+    if kind not in ("webhook", "database", "csv", "http", "pdf", "sftp", "ftps"):
         raise RuntimeError("tipo di collegamento non riconosciuto")
     config = body.get("config") or {}
     if kind == "database":
         for field in ("host", "database", "user", "query"):
             if not str(config.get(field) or "").strip():
                 raise RuntimeError(f"manca {field}")
+        engine = str(config.get("engine") or "mysql")
+        if engine not in carico.ENGINES:
+            raise RuntimeError("motore database non riconosciuto")
         config["query"] = validate_select(config["query"])
-        config["port"] = int(config.get("port") or 3306)
+        config["engine"] = engine
+        config["port"] = int(config.get("port") or carico.engine_port(engine))
         config["host"] = str(config["host"]).strip()
         config["database"] = str(config["database"]).strip()
         config["user"] = str(config["user"]).strip()
+        config["tls"] = bool(config.get("tls"))
+        config["sslCa"] = str(config.get("sslCa") or "").strip()
+        config["tunnelHost"] = str(config.get("tunnelHost") or "").strip()
+        config["tunnelPort"] = int(config.get("tunnelPort") or 22) if config.get("tunnelHost") else ""
+        config["tunnelUser"] = str(config.get("tunnelUser") or "").strip()
+        config["tunnelPassword"] = str(config.get("tunnelPassword") or "")
+    if kind in ("sftp", "ftps"):
+        for field in ("host", "user", "path"):
+            if not str(config.get(field) or "").strip():
+                raise RuntimeError(f"manca {field}")
+        config = {
+            "host": str(config["host"]).strip(),
+            "port": int(config.get("port") or (22 if kind == "sftp" else 21)),
+            "user": str(config["user"]).strip(),
+            "password": str(config.get("password") or ""),
+            "path": str(config["path"]).strip(),
+        }
     if kind == "http":
         url = str(config.get("url") or "").strip()
         if url and not url.startswith(("http://", "https://")):
@@ -2500,6 +2559,10 @@ def save_connection(body: dict) -> dict:
             token = current["token"]
             previous = json.loads(current["config_json"])
             if kind == "database" and not str(config.get("password") or "") and previous.get("password"):
+                config["password"] = previous["password"]
+            if kind == "database" and not str(config.get("tunnelPassword") or "") and previous.get("tunnelPassword"):
+                config["tunnelPassword"] = previous["tunnelPassword"]
+            if kind in ("sftp", "ftps") and not str(config.get("password") or "") and previous.get("password"):
                 config["password"] = previous["password"]
             if kind == "http":
                 if not config.get("token") and previous.get("token"):
@@ -2549,6 +2612,171 @@ def save_connection(body: dict) -> dict:
     return result
 
 
+def mysql_kwargs(config: dict) -> dict:
+    import pymysql
+
+    kwargs = {
+        "host": config["host"],
+        "port": int(config.get("port") or 3306),
+        "user": config["user"],
+        "password": config.get("password") or "",
+        "database": config["database"],
+        "connect_timeout": 8,
+        "read_timeout": 30,
+        "cursorclass": pymysql.cursors.DictCursor,
+    }
+    if config.get("tls"):
+        ssl = {}
+        if config.get("sslCa"):
+            ssl["ca"] = str(config["sslCa"])
+        kwargs["ssl"] = ssl
+    return kwargs
+
+
+def open_sql(config: dict):
+    engine = str(config.get("engine") or "mysql")
+    host = config["host"]
+    port = int(config.get("port") or carico.engine_port(engine))
+    user = config["user"]
+    password = config.get("password") or ""
+    database = config["database"]
+    if engine == "mysql":
+        import pymysql
+
+        return pymysql.connect(**mysql_kwargs(config))
+    if engine == "postgres":
+        import psycopg
+        from psycopg.rows import dict_row
+
+        return psycopg.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            dbname=database,
+            connect_timeout=8,
+            sslmode="require" if config.get("tls") else "disable",
+            row_factory=dict_row,
+        )
+    if engine == "mssql":
+        try:
+            import pymssql
+        except ImportError as error:
+            raise RuntimeError("il driver mssql non è installato") from error
+        return pymssql.connect(
+            server=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database,
+            login_timeout=8,
+            timeout=30,
+            as_dict=True,
+            tds_version="7.4",
+        )
+    if engine == "oracle":
+        import oracledb
+
+        protocol = "tcps" if config.get("tls") else "tcp"
+        return oracledb.connect(
+            user=user,
+            password=password,
+            dsn=f"{protocol}://{host}:{port}/{database}",
+        )
+    raise RuntimeError("motore database non riconosciuto")
+
+
+def start_tunnel(config: dict, dest_host: str, dest_port: int):
+    import socket
+    import threading
+
+    import paramiko
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        str(config["tunnelHost"]),
+        port=int(config.get("tunnelPort") or 22),
+        username=str(config.get("tunnelUser") or ""),
+        password=str(config.get("tunnelPassword") or ""),
+        timeout=8,
+        allow_agent=False,
+        look_for_keys=False,
+    )
+    transport = client.get_transport()
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    local_port = listener.getsockname()[1]
+    stopped = threading.Event()
+
+    def serve() -> None:
+        while not stopped.is_set():
+            listener.settimeout(0.5)
+            try:
+                sock, _peer = listener.accept()
+            except OSError:
+                continue
+            try:
+                channel = transport.open_channel(
+                    "direct-tcpip",
+                    (dest_host, int(dest_port)),
+                    sock.getpeername(),
+                )
+            except Exception:
+                sock.close()
+                continue
+
+            def pipe(source, target) -> None:
+                try:
+                    while True:
+                        data = source.recv(65536)
+                        if not data:
+                            break
+                        target.sendall(data)
+                except Exception:
+                    pass
+                try:
+                    source.close()
+                except Exception:
+                    pass
+                try:
+                    target.close()
+                except Exception:
+                    pass
+
+            threading.Thread(target=pipe, args=(sock, channel), daemon=True).start()
+            threading.Thread(target=pipe, args=(channel, sock), daemon=True).start()
+
+    threading.Thread(target=serve, daemon=True).start()
+
+    def close() -> None:
+        stopped.set()
+        try:
+            listener.close()
+        except OSError:
+            pass
+        client.close()
+
+    return close, local_port
+
+
+def fetch_dicts(connection, sql: str, params: list) -> list[dict]:
+    cursor = connection.cursor()
+    try:
+        cursor.execute(sql, params or None)
+        raw = cursor.fetchall()
+        if raw and not isinstance(raw[0], dict):
+            columns = [item[0] for item in cursor.description]
+            raw = [dict(zip(columns, row)) for row in raw]
+    finally:
+        cursor.close()
+    return [
+        {key: None if value is None else str(value) for key, value in row.items()}
+        for row in raw
+    ]
+
+
 def read_database(
     config: dict,
     sample: int | None = None,
@@ -2557,68 +2785,91 @@ def read_database(
     id_column: str | None = None,
     limit: int | None = None,
 ) -> list[dict]:
-    import pymysql
-
+    engine = str(config.get("engine") or "mysql")
+    if engine not in carico.ENGINES:
+        raise RuntimeError("motore database non riconosciuto")
     sql = validate_select(config["query"])
     where = ""
     order = ""
     params: list[str] = []
+    active = dict(config)
+    closer = None
+    if config.get("tunnelHost"):
+        dest_port = int(config.get("port") or carico.engine_port(engine))
+        closer, local_port = start_tunnel(config, config["host"], dest_port)
+        active["host"] = "127.0.0.1"
+        active["port"] = local_port
+        active["tunnelHost"] = ""
     if cursor_column and id_column and not sample:
         column = safe_ident(cursor_column)
         identity = safe_ident(id_column)
-        order = f"ORDER BY `{column}`, `{identity}`"
+        quoted_column = carico.quote_ident(column, engine)
+        quoted_identity = carico.quote_ident(identity, engine)
+        order = f"ORDER BY {quoted_column}, {quoted_identity}"
         stamp, last_id = split_cursor(cursor_value or "")
         if stamp:
-            where = f"WHERE `{column}` > %s OR (`{column}` = %s AND `{identity}` > %s)"
+            if engine == "oracle":
+                where = (
+                    f"WHERE {quoted_column} > :1 OR "
+                    f"({quoted_column} = :2 AND {quoted_identity} > :3)"
+                )
+            else:
+                where = (
+                    f"WHERE {quoted_column} > %s OR "
+                    f"({quoted_column} = %s AND {quoted_identity} > %s)"
+                )
             params = [stamp, stamp, last_id]
-    source = sql.replace("%", "%%") if params else sql
+    escape = bool(params) and engine != "oracle"
+    source = sql.replace("%", "%%") if escape else sql
 
     def page(size: int, offset: int) -> list[dict]:
-        wrapped = (
-            f"SELECT * FROM ({source}) AS sorgente {where} {order} "
-            f"LIMIT {int(size)} OFFSET {int(offset)}"
-        )
-        connection = pymysql.connect(
-            host=config["host"],
-            port=int(config.get("port") or 3306),
-            user=config["user"],
-            password=config.get("password") or "",
-            database=config["database"],
-            connect_timeout=8,
-            read_timeout=30,
-            cursorclass=pymysql.cursors.DictCursor,
-        )
+        if engine == "mysql":
+            wrapped = (
+                f"SELECT * FROM ({source}) AS sorgente {where} {order} "
+                f"LIMIT {int(size)} OFFSET {int(offset)}"
+            )
+        else:
+            wrapped = carico.page_sql(source, engine, where, order, size, offset)
+        connection = open_sql(active)
         try:
-            with connection.cursor() as cursor:
-                cursor.execute(wrapped, params or None)
-                raw_rows = cursor.fetchall()
+            return fetch_dicts(connection, wrapped, params)
         finally:
             connection.close()
-        return [
-            {key: None if value is None else str(value) for key, value in row.items()}
-            for row in raw_rows
-        ]
 
-    if sample or limit is not None:
-        return page(5 if sample and limit is None else int(limit or 5), 0)
-    return carico.collect_pages(page, carico.PAGE_SIZE)
+    try:
+        if sample or limit is not None:
+            return page(5 if sample and limit is None else int(limit or 5), 0)
+        return carico.collect_pages(page, carico.PAGE_SIZE)
+    finally:
+        if closer:
+            closer()
 
 
 def csv_delimiter(header: str) -> str:
     return ";" if header.count(";") > header.count(",") else ","
 
 
+def sheet_paths(folder: Path) -> list[Path]:
+    found = list(folder.glob("*.csv")) + list(folder.glob("*.xlsx"))
+    return sorted(found, key=lambda path: path.name.lower())
+
+
+def read_table(path: Path) -> tuple[list[str], list[dict]]:
+    if path.suffix.lower() == ".xlsx":
+        return carico.rows_from_xlsx(path.read_bytes())
+    return read_csv_file(path)
+
+
 def csv_headers(connection_id: str) -> list[str]:
     folder = SCAMBIO / connection_id
     if not folder.is_dir():
         return []
-    for path in sorted(folder.glob("*.csv")):
+    for path in sheet_paths(folder):
         try:
-            header = path.read_text(encoding="utf-8-sig").splitlines()[0]
-        except (OSError, IndexError):
+            headers, _rows = read_table(path)
+        except (OSError, IndexError, ValueError):
             return []
-        row = next(csv.reader([header], delimiter=csv_delimiter(header)), [])
-        return [name.strip() for name in row if name and name.strip()]
+        return headers
     return []
 
 
@@ -2628,12 +2879,10 @@ def read_csv_folder(connection_id: str) -> list[tuple[Path, dict]]:
     done = folder / "elaborati"
     done.mkdir(exist_ok=True)
     found = []
-    for path in sorted(folder.glob("*.csv")):
-        header = path.read_text(encoding="utf-8-sig").splitlines()[:1]
-        delimiter = csv_delimiter(header[0] if header else "")
-        with path.open(encoding="utf-8-sig", newline="") as handle:
-            for row in csv.DictReader(handle, delimiter=delimiter):
-                found.append((path, {key: value for key, value in row.items() if key}))
+    for path in sheet_paths(folder):
+        _headers, rows = read_table(path)
+        for row in rows:
+            found.append((path, row))
     return found
 
 
@@ -2792,6 +3041,18 @@ def dry_run(pipeline_id: str) -> dict:
         payloads = source
     elif link["kind"] == "csv":
         payloads = [row for _path, row in read_csv_folder(link["id"])[:5]]
+    elif link["kind"] in ("sftp", "ftps"):
+        remote = open_remote(link["kind"], config)
+        try:
+            payloads = []
+            for name in carico.remote_file_names(remote.names()):
+                _headers, rows = carico.rows_from_bytes(name, remote.read(name))
+                payloads.extend(rows)
+                if len(payloads) >= 5:
+                    payloads = payloads[:5]
+                    break
+        finally:
+            remote.close()
     else:
         raise RuntimeError("questo collegamento non ha una prova a secco")
     rows = []
@@ -3104,6 +3365,194 @@ def execute_pdf(pipeline, link, held: bool) -> dict:
     return {"attached": attached, "waiting": waiting, "status": status, "detail": detail}
 
 
+class RemoteDir:
+    def names(self) -> list[str]:
+        raise NotImplementedError
+
+    def read(self, name: str) -> bytes:
+        raise NotImplementedError
+
+    def rename(self, name: str, dest: str) -> None:
+        raise NotImplementedError
+
+    def put(self, name: str, data: bytes) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        return None
+
+
+class SftpDir(RemoteDir):
+    def __init__(self, config: dict):
+        import paramiko
+
+        self.client = paramiko.SSHClient()
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self.client.connect(
+            config["host"],
+            port=int(config.get("port") or 22),
+            username=config["user"],
+            password=config.get("password") or "",
+            timeout=8,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+        self.sftp = self.client.open_sftp()
+        self.sftp.chdir(str(config.get("path") or "."))
+
+    def names(self) -> list[str]:
+        return self.sftp.listdir()
+
+    def read(self, name: str) -> bytes:
+        with self.sftp.open(name, "rb") as handle:
+            return handle.read()
+
+    def rename(self, name: str, dest: str) -> None:
+        folder = dest.rsplit("/", 1)[0] if "/" in dest else ""
+        if folder:
+            try:
+                self.sftp.stat(folder)
+            except OSError:
+                self.sftp.mkdir(folder)
+        self.sftp.rename(name, dest)
+
+    def put(self, name: str, data: bytes) -> None:
+        with self.sftp.open(name, "wb") as handle:
+            handle.write(data)
+
+    def close(self) -> None:
+        try:
+            self.sftp.close()
+        finally:
+            self.client.close()
+
+
+class FtpsDir(RemoteDir):
+    def __init__(self, config: dict):
+        import ftplib
+
+        self.ftp = ftplib.FTP_TLS()
+        self.ftp.connect(config["host"], int(config.get("port") or 21), timeout=8)
+        self.ftp.login(config["user"], config.get("password") or "")
+        self.ftp.prot_p()
+        self.ftp.cwd(str(config.get("path") or "."))
+
+    def names(self) -> list[str]:
+        return self.ftp.nlst()
+
+    def read(self, name: str) -> bytes:
+        chunks: list[bytes] = []
+        self.ftp.retrbinary("RETR " + name, chunks.append)
+        return b"".join(chunks)
+
+    def rename(self, name: str, dest: str) -> None:
+        folder = dest.rsplit("/", 1)[0] if "/" in dest else ""
+        if folder:
+            try:
+                self.ftp.mkd(folder)
+            except Exception:
+                pass
+        self.ftp.rename(name, dest)
+
+    def put(self, name: str, data: bytes) -> None:
+        import io
+
+        self.ftp.storbinary("STOR " + name, io.BytesIO(data))
+
+    def close(self) -> None:
+        try:
+            self.ftp.quit()
+        except Exception:
+            self.ftp.close()
+
+
+def open_remote(kind: str, config: dict) -> RemoteDir:
+    if kind == "sftp":
+        return SftpDir(config)
+    if kind == "ftps":
+        return FtpsDir(config)
+    raise RuntimeError("tipo di collegamento non riconosciuto")
+
+
+def consume_tables(pipeline, pipeline_id: str, tables: list[tuple[str, list[str], list[dict]]], move, held: bool, prefix: str) -> dict:
+    mapping = json.loads(pipeline["mapping_json"])
+    required = carico.required_columns(
+        pipeline["external_id_field"],
+        mapping,
+        key_column_list(pipeline)[1:],
+    )
+    counts = fresh_counts()
+    seen: set[str] = set()
+    taken = 0
+    processed = 0
+    read_rows: list[dict] = []
+    for name, headers, file_rows in tables:
+        missing = carico.missing_headers(headers, required)
+        if missing:
+            detail = "manca la colonna " + missing[0]
+            remember_reject(pipeline_id, "", {"file": name}, detail)
+            tally({"status": "scartato", "detail": detail}, counts)
+            continue
+        seen.update(note_rows(pipeline_id, file_rows, counts, held))
+        read_rows.extend(file_rows)
+        taken += len(file_rows)
+        move(name)
+        processed += 1
+    settle_closes(pipeline, seen, counts, full=processed > 0 and not pipeline["cursor_column"], hold=held)
+    status, detail = finish_counts(f"{taken} {prefix}", counts)
+    mark_run(pipeline_id, status, detail, counts)
+    if read_rows and not held:
+        try:
+            capture_balance(pipeline, read_rows)
+        except Exception:
+            pass
+    return run_result(taken, counts, status)
+
+
+def execute_remote_in(pipeline, kind: str, config: dict, held: bool) -> dict:
+    remote = open_remote(kind, config)
+    try:
+        names = carico.remote_file_names(remote.names())
+        tables = []
+        for name in names:
+            headers, rows = carico.rows_from_bytes(name, remote.read(name))
+            tables.append((name, headers, rows))
+
+        def move(name: str) -> None:
+            remote.rename(name, f"elaborati/{time.strftime('%Y%m%d%H%M%S')}-{name}")
+
+        return consume_tables(pipeline, pipeline["id"], tables, move, held, "righe dal file remoto")
+    finally:
+        remote.close()
+
+
+def execute_remote_out(pipeline_id: str, kind: str, config: dict) -> dict:
+    records = outbound_rows(pipeline_id)
+    if not records:
+        mark_run(pipeline_id, "ok", "0 record depositati")
+        return {"sent": 0, "missingDate": False}
+    remote = open_remote(kind, config)
+    try:
+        if records:
+            name = f"nesso-{time.strftime('%Y%m%d%H%M%S')}.csv"
+            remote.put(name, carico.csv_bytes([item["payload"] for item in records]))
+        last = None
+        for item in records:
+            remember_sink(pipeline_id, item["espoId"], item["payload"])
+            if item.get("espoId") or item.get("modifiedAt"):
+                last = item
+        missing_date = remember_outbound_cursor(pipeline_id, last) if last else False
+    except Exception:
+        remote.close()
+        raise
+    remote.close()
+    detail = f"{len(records)} record depositati"
+    if missing_date:
+        detail += ". manca la data di modifica, il cursore segue l'id"
+    mark_run(pipeline_id, "ok", detail)
+    return {"sent": len(records), "missingDate": missing_date}
+
+
 def execute_pipeline(pipeline_id: str) -> dict:
     with connect() as conn:
         pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
@@ -3118,7 +3567,10 @@ def execute_pipeline(pipeline_id: str) -> dict:
     if link is None:
         if pipeline["direction"] == "out":
             result = pull(pipeline_id)
-            mark_run(pipeline_id, "ok", f"letti {result['exported']} record, senza destinazione")
+            detail = f"letti {result['exported']} record, senza destinazione"
+            if result.get("missingDate"):
+                detail += ". manca la data di modifica, il cursore segue l'id"
+            mark_run(pipeline_id, "ok", detail)
             return result
         raise RuntimeError("collega un sistema esterno prima di eseguire")
     config = json.loads(link["config_json"])
@@ -3161,8 +3613,8 @@ def execute_pipeline(pipeline_id: str) -> dict:
         taken = 0
         processed = 0
         read_rows: list[dict] = []
-        for path in sorted(folder.glob("*.csv")):
-            headers, file_rows = read_csv_file(path)
+        for path in sheet_paths(folder):
+            headers, file_rows = read_table(path)
             missing = carico.missing_headers(headers, required)
             if missing:
                 detail = "manca la colonna " + missing[0]
@@ -3203,13 +3655,18 @@ def execute_pipeline(pipeline_id: str) -> dict:
             remember_sink(pipeline_id, item["espoId"], item["payload"])
             last = item
             sent += 1
-        if last and last["modifiedAt"]:
-            save_cursor(pipeline_id, last["modifiedAt"], last["espoId"])
+        missing_date = remember_outbound_cursor(pipeline_id, last) if last else False
         detail = f"{sent} record inviati a {url}"
+        if missing_date:
+            detail += ". manca la data di modifica, il cursore segue l'id"
         if failed:
             detail += ". " + failed
         mark_run(pipeline_id, "errore" if failed else "ok", detail)
         return {"sent": sent, "url": url, "failed": bool(failed)}
+    if link["kind"] in ("sftp", "ftps"):
+        if pipeline["direction"] == "out":
+            return execute_remote_out(pipeline_id, link["kind"], config)
+        return execute_remote_in(pipeline, link["kind"], config, held)
     raise RuntimeError("tipo di collegamento non gestito")
 
 

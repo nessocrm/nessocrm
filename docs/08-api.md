@@ -61,7 +61,7 @@ Lo usa la pagina a ogni refresh. Contiene:
 | `morning` | percentuale delle anagrafiche, tono e frase. `percent` è nullo se oggi non c'è un giro riuscito |
 | `alerts` | frasi della quadratura rossa e del file atteso non elaborato |
 
-Su ogni integrazione in ingresso da CSV, `balance` è la quadratura e `file_alert` è 1 se il file atteso non è ancora stato elaborato oggi. `expectAt` si salva con l'integrazione, accanto a `scheduleAt`.
+Su ogni integrazione in ingresso da CSV, `balance` è la quadratura e `file_alert` è 1 se il file atteso non è ancora stato elaborato oggi. `expectAt` si salva con l'integrazione, accanto a `scheduleAt`. Ogni integrazione ha `pace`: prossimo giro, ultimo successo con da quanto tace, ultimo errore. Il kind di un collegamento può essere anche `sftp` o `ftps`; il database accetta `engine` (`mysql`, `postgres`, `mssql`, `oracle`), `tls` e i campi del tunnel. La password non è nel JSON.
 
 ## POST /api/connections
 

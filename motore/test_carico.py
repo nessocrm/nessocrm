@@ -531,5 +531,68 @@ class IngressoRuoloAvviso(unittest.TestCase):
         self.assertFalse(carico.password_matches("altra-password", record))
 
 
+class StatoECanali(unittest.TestCase):
+    def test_in_elenco_si_legge_successo_e_silenzio(self):
+        moment = datetime(2026, 10, 20, 8, 12, 0)
+        pace = carico.run_pace(
+            moment,
+            "02:10",
+            0,
+            "2026-10-20 02:12:00",
+            "2026-10-19 02:12:00",
+            "2026-10-18 23:20:00",
+            "ricerca Account HTTP 403",
+        )
+        self.assertEqual(pace["sentence"], "Ultimo successo ieri alle 02:12, tace da 30 ore.")
+        self.assertEqual(pace["next"]["text"], "il 2026-10-21 02:10")
+        self.assertIn("23:20", pace["error"]["text"])
+        self.assertNotIn("02:12", pace["error"]["text"])
+        quiet = carico.run_pace(moment, "", 0, None, None, None, None)
+        self.assertEqual(quiet["sentence"], "Non c'è ancora un successo.")
+        self.assertEqual(quiet["next"]["text"], "Solo a comando")
+
+    def test_senza_data_il_cursore_segue_lid(self):
+        self.assertFalse(carico.skip_without_date("2026-10-20 01:00:00", "a1", "", "a2"))
+        self.assertFalse(carico.skip_without_date("", "b1", "2026-10-20 01:00:00", "a2"))
+        self.assertTrue(carico.skip_without_date("", "a1", "", "a2"))
+        self.assertTrue(carico.skip_without_date("", "a2", "", "a2"))
+        self.assertFalse(carico.skip_without_date("", "b1", "", "a2"))
+
+    def test_excel_ha_le_stesse_colonne_del_csv(self):
+        import io
+        import zipfile
+
+        sheet = """<?xml version="1.0" encoding="UTF-8"?>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData>
+            <row r="1"><c r="A1" t="inlineStr"><is><t>codice</t></is></c><c r="B1" t="inlineStr"><is><t>nome</t></is></c></row>
+            <row r="2"><c r="A2" t="inlineStr"><is><t>1</t></is></c><c r="B2" t="inlineStr"><is><t>Nord</t></is></c></row>
+          </sheetData>
+        </worksheet>"""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as book:
+            book.writestr("xl/worksheets/sheet1.xml", sheet)
+        headers, rows = carico.rows_from_xlsx(buffer.getvalue())
+        self.assertEqual(headers, ["codice", "nome"])
+        self.assertEqual(rows, [{"codice": "1", "nome": "Nord"}])
+        self.assertEqual(carico.remote_file_names(["note.txt", "clienti.XLSX", "elaborati/gia.csv", "ordini.csv"]), ["clienti.XLSX", "ordini.csv"])
+
+    def test_la_select_resta_in_sola_lettura_e_mysql_non_cambia_forma(self):
+        self.assertEqual(carico.quote_ident("codice", "mysql"), "`codice`")
+        self.assertEqual(carico.quote_ident("codice", "postgres"), '"codice"')
+        sql = carico.page_sql("SELECT codice FROM clienti", "postgres", "", 'ORDER BY "codice"', 200, 0)
+        self.assertIn("LIMIT 200 OFFSET 0", sql)
+        self.assertNotIn("INSERT", sql.upper())
+        oracle = carico.page_sql("SELECT codice FROM clienti", "oracle", "", "", 200, 0)
+        self.assertIn("OFFSET 0 ROWS FETCH NEXT 200 ROWS ONLY", oracle)
+        mysql = carico.page_sql("SELECT codice FROM clienti", "mysql", "", "", 5, 0)
+        self.assertEqual(
+            mysql,
+            "SELECT * FROM (SELECT codice FROM clienti) AS sorgente   LIMIT 5 OFFSET 0",
+        )
+        self.assertEqual(carico.engine_port("mysql"), 3306)
+        self.assertEqual(carico.engine_port("postgres"), 5432)
+
+
 if __name__ == "__main__":
     unittest.main()

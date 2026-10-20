@@ -80,7 +80,7 @@ Appendice dell'uscita. Ogni record letto da Espo aggiunge una riga, anche se lo 
 
 ## cursor_state
 
-Una riga per integrazione. In uscita `cursor_value` è `modifiedAt`, una tabulazione, e l'id Espo. In ingresso, se c'è la colonna di variazione, è l'ultimo valore letto, una tabulazione, e l'identità esterna. Se manca `modifiedAt`, il cursore di uscita non avanza.
+Una riga per integrazione. In uscita `cursor_value` è `modifiedAt`, una tabulazione, e l'id Espo. Se la data manca, la prima parte resta vuota e resta l'id: il giro dopo non rimanda quell'id. In ingresso, se c'è la colonna di variazione, è l'ultimo valore letto, una tabulazione, e l'identità esterna.
 
 ## scarto
 

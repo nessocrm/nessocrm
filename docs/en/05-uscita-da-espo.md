@@ -33,7 +33,7 @@ Cursors present on 17/10/2026:
 | `contatti-da-espo` | 2026-10-17 10:14:23 |
 | `lead-verso-portale` | 2026-10-17 10:53:11 |
 
-The select always asks for `id` and `modifiedAt`, even if the mapping does not map them. If a record has no `modifiedAt`, the cursor does not advance on that record.
+The select always asks for `id` and `modifiedAt`, even if the mapping does not map them. If a record has no `modifiedAt`, the cursor still advances on the id already delivered and the run detail says the date is missing. That id does not leave again on the next run.
 
 ## Send
 

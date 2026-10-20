@@ -65,7 +65,7 @@ Outbound. Integration on an HTTP connection, "Run now". With an empty URL, "Late
 | Run now on the database marks rejected | `last_detail` has the first reason. The known case is the account name already used by another key |
 | A CSV row does not enter | if the column exists, the file is still in `elaborati/` and the row is in Activity. If a required column is missing, the file stays in the folder and there is a single reject |
 | Run now says a run is already in progress | another run, or the scheduler, holds `RUN_LOCK` |
-| Outbound always resends the same records | the cursor does not advance. It happens if the records read have no `modifiedAt` |
+| Outbound always resends the same records | the cursor does not advance. If `modifiedAt` is missing the cursor follows the id already delivered; if it still resends, the previous POST did not succeed |
 | Outbound does not resend a record that is already in Espo | its `modifiedAt` is less than or equal to the cursor in `cursor_state` |
 | A field is not in the menu | type not writable, read only, entity without a tab, or the 120-second cache just after a creation |
 | The build does not change the page | the image was not rebuilt |

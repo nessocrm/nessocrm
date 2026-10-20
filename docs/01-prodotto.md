@@ -107,7 +107,7 @@ Universale, qui, ha un senso preciso.
 
 ## Che cosa questa versione tiene fisso
 
-- I tipi di canale sono webhook, database, CSV, PDF sul cliente e HTTP in uscita. Non c'è SFTP, non c'è Postgres, non c'è una coda, non c'è OAuth.
+- I tipi di canale sono webhook, database, CSV, Excel, SFTP, FTPS, PDF sul cliente e HTTP in uscita. Il database è MySQL, MariaDB, Postgres, SQL Server o Oracle, solo in lettura. Non c'è una coda, non c'è OAuth.
 - Il database letto è MySQL o MariaDB, e solo in SELECT.
 - Il motore non scrive sul sistema sorgente.
 - Se Espo rifiuta un record perché ne esiste uno simile con un'altra chiave, la riga viene scartata, salvo che l'integrazione sia impostata per aggiornare quel record.

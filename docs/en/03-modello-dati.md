@@ -80,7 +80,7 @@ Appendix of outbound. Every record read from Espo adds a row, even if the same r
 
 ## cursor_state
 
-One row per integration. Outbound, `cursor_value` is `modifiedAt`, a tab, and the Espo id. Inbound, if there is a change column, it is the last value read, a tab, and the external identity. If `modifiedAt` is missing, the outbound cursor does not advance.
+One row per integration. Outbound, `cursor_value` is `modifiedAt`, a tab, and the Espo id. If the date is missing, the first part stays empty and the id remains: the next run does not send that id again. Inbound, if there is a change column, it is the last value read, a tab, and the external identity.
 
 ## scarto
 

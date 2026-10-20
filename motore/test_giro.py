@@ -697,5 +697,192 @@ class Giro(unittest.TestCase):
             return {"code": error.code, "body": parsed, "cookie": cookie}
 
 
+class StatoCanaliCursore(unittest.TestCase):
+    def setUp(self):
+        app.DB_PATH = Path(os.environ["DB_PATH"])
+        app.SCAMBIO = Path(os.environ["SCAMBIO_DIR"])
+        app.init_db()
+        with app.connect() as conn:
+            conn.execute("DELETE FROM pipeline")
+            conn.execute("DELETE FROM connection")
+            conn.execute("DELETE FROM run_log")
+            conn.execute("DELETE FROM scarto")
+            conn.execute("DELETE FROM queue_item")
+            conn.execute("DELETE FROM presenza")
+            conn.execute("DELETE FROM cursor_state")
+            conn.execute("DELETE FROM sink_item")
+            conn.execute("UPDATE setting SET value = '1' WHERE key = 'writes'")
+        self._page = app.espo_page
+        self._remote = app.open_remote
+        self._request = app.espo_request
+
+    def tearDown(self):
+        app.espo_page = self._page
+        app.open_remote = self._remote
+        app.espo_request = self._request
+
+    def test_xlsx_si_sposta_e_sftp_deposita_senza_rinviare(self):
+        import io
+        import zipfile
+
+        sheet = """<?xml version="1.0" encoding="UTF-8"?>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData>
+            <row r="1"><c r="A1" t="inlineStr"><is><t>codice</t></is></c><c r="B1" t="inlineStr"><is><t>nome</t></is></c></row>
+            <row r="2"><c r="A2" t="inlineStr"><is><t>9</t></is></c><c r="B2" t="inlineStr"><is><t>Nord</t></is></c></row>
+          </sheetData>
+        </worksheet>"""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as book:
+            book.writestr("xl/worksheets/sheet1.xml", sheet)
+        data = buffer.getvalue()
+        folder = app.SCAMBIO / "fogli"
+        folder.mkdir(parents=True)
+        (folder / "clienti.xlsx").write_bytes(data)
+        with app.connect() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, name, kind, config_json, token) VALUES ('fogli', 'Fogli', 'csv', '{}', 'tok')"
+            )
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id)
+                VALUES ('clienti', 'Clienti', 'in', 'Account', 'codice', 'clienti:{codice}', ?, 'cExternalKey', 'fogli')
+                """,
+                ('[{"from":"codice","to":"name","transform":"copy","owner":"sorgente"}]',),
+            )
+
+        def fake(method, path, body=None, query=None):
+            if method == "GET":
+                return 200, {"list": []}
+            return 201, {"id": "esp-9"}
+
+        app.espo_request = fake
+        app.execute_pipeline("clienti")
+        self.assertFalse((folder / "clienti.xlsx").exists())
+        self.assertEqual(len(list((folder / "elaborati").glob("*.xlsx"))), 1)
+
+        class Finto:
+            def __init__(self):
+                self.files = {"ordini.xlsx": data}
+                self.moved = []
+                self.sent = []
+
+            def names(self):
+                return list(self.files)
+
+            def read(self, name):
+                return self.files[name]
+
+            def rename(self, name, dest):
+                self.moved.append(dest)
+                self.files.pop(name, None)
+
+            def put(self, name, payload):
+                self.sent.append((name, payload))
+
+            def close(self):
+                return None
+
+        remote = Finto()
+        app.open_remote = lambda kind, config: remote
+        with app.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO connection (id, name, kind, config_json, token)
+                VALUES ('scambio-remoto', 'Remoto', 'sftp', ?, 'tok')
+                """,
+                (json.dumps({"host": "files", "user": "scambio", "password": "non-in-chiaro", "path": "/in"}),),
+            )
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id)
+                VALUES ('ordini', 'Ordini', 'in', 'Account', 'codice', 'ordini:{codice}', ?, 'cExternalKey', 'scambio-remoto')
+                """,
+                ('[{"from":"codice","to":"name","transform":"copy","owner":"sorgente"}]',),
+            )
+        app.execute_pipeline("ordini")
+        self.assertEqual(len(remote.moved), 1)
+        self.assertTrue(remote.moved[0].startswith("elaborati/"))
+        self.assertNotIn("ordini.xlsx", remote.files)
+        shown = app.public_connection({
+            "id": "scambio-remoto",
+            "name": "Remoto",
+            "kind": "sftp",
+            "token": "tok",
+            "config_json": json.dumps({"host": "files", "password": "non-in-chiaro", "tunnelPassword": "tunnel-segreto"}),
+        })
+        self.assertEqual(shown["config"]["password"], "")
+        self.assertEqual(shown["config"]["tunnelPassword"], "")
+        self.assertNotIn("non-in-chiaro", json.dumps(shown))
+
+    def test_senza_modified_at_il_secondo_giro_non_rimanda(self):
+        rows = [
+            {"id": "a1", "modifiedAt": "", "name": "Uno"},
+            {"id": "a2", "modifiedAt": "", "name": "Due"},
+        ]
+        app.espo_page = lambda *args, **kwargs: rows
+        first = app.collect_changes("Lead", "id,modifiedAt,name", "1970-01-01 00:00:00", 100)
+        self.assertEqual([item["id"] for item in first], ["a1", "a2"])
+        with app.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field)
+                VALUES ('uscita', 'Uscita', 'out', 'Lead', 'id', '', ?, 'cExternalKey')
+                """,
+                ('[{"from":"name","to":"nome","transform":"copy"}]',),
+            )
+        pulled = app.pull("uscita")
+        self.assertEqual(pulled["exported"], 2)
+        self.assertTrue(pulled["missingDate"])
+        with app.connect() as conn:
+            cursor = conn.execute("SELECT cursor_value FROM cursor_state WHERE pipeline_id = 'uscita'").fetchone()["cursor_value"]
+            detail_row = None
+        self.assertEqual(cursor, "\ta2")
+        second = app.collect_changes("Lead", "id,modifiedAt,name", cursor, 100)
+        self.assertEqual(second, [])
+        again = app.pull("uscita")
+        self.assertEqual(again["exported"], 0)
+        self.assertIsNone(detail_row)
+
+    def test_mysql_senza_tls_non_aggiunge_ssl(self):
+        import sys
+        import types
+
+        calls = []
+        fake = types.ModuleType("pymysql")
+        fake.cursors = types.SimpleNamespace(DictCursor=object())
+
+        def connect(**kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("fermo")
+
+        fake.connect = connect
+        saved = sys.modules.get("pymysql")
+        sys.modules["pymysql"] = fake
+        try:
+            for tls in (False, True):
+                with self.assertRaises(RuntimeError):
+                    app.open_sql({
+                        "engine": "mysql",
+                        "host": "db",
+                        "user": "espocrm",
+                        "password": "locale-db",
+                        "database": "gestionale",
+                        "tls": tls,
+                    })
+        finally:
+            if saved is None:
+                sys.modules.pop("pymysql", None)
+            else:
+                sys.modules["pymysql"] = saved
+        self.assertNotIn("ssl", calls[0])
+        self.assertEqual(calls[0]["port"], 3306)
+        self.assertEqual(calls[0]["host"], "db")
+        self.assertIn("ssl", calls[1])
+
+
 if __name__ == "__main__":
     unittest.main()

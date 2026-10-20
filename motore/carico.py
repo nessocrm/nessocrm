@@ -1066,11 +1066,242 @@ def notice_needed(open_kinds: set[str], kind: str) -> bool:
 def silence_elapsed(last_success: str | None, minutes: int, now: datetime) -> bool:
     if minutes <= 0 or not last_success:
         return False
-    try:
-        then = datetime.strptime(str(last_success)[:19], "%Y-%m-%d %H:%M:%S")
-    except ValueError:
+    then = _parse_stamp(last_success)
+    if then is None:
         return False
     return (now - then).total_seconds() >= minutes * 60
+
+
+def _parse_stamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def next_run(schedule_at: str | None, schedule_minutes: int, last_run: str | None, now: datetime) -> dict:
+    if schedule_at:
+        hour, minute = _clock(schedule_at)
+        slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        previous = _parse_stamp(last_run)
+        if previous and previous >= slot:
+            slot += timedelta(days=1)
+        if slot <= now:
+            return {"text": "al prossimo controllo", "textKey": "al prossimo controllo", "textParams": {}}
+        when = slot.strftime("%Y-%m-%d %H:%M")
+        return {"text": f"il {when}", "textKey": "il {quando}", "textParams": {"quando": when}}
+    minutes = int(schedule_minutes or 0)
+    if minutes <= 0:
+        return {"text": "Solo a comando", "textKey": "Solo a comando", "textParams": {}}
+    previous = _parse_stamp(last_run)
+    if previous is None:
+        return {"text": "al prossimo controllo", "textKey": "al prossimo controllo", "textParams": {}}
+    slot = previous + timedelta(minutes=minutes)
+    if slot <= now:
+        return {"text": "al prossimo controllo", "textKey": "al prossimo controllo", "textParams": {}}
+    when = slot.strftime("%Y-%m-%d %H:%M")
+    return {"text": f"il {when}", "textKey": "il {quando}", "textParams": {"quando": when}}
+
+
+def _success_when(stamp: str, now: datetime) -> tuple[str, str, dict]:
+    then = _parse_stamp(stamp)
+    if then is None:
+        return "", "", {}
+    hour = then.strftime("%H:%M")
+    if then.date() == now.date():
+        return f"oggi alle {hour}", "oggi alle {ora}", {"ora": hour}
+    if then.date() == (now - timedelta(days=1)).date():
+        return f"ieri alle {hour}", "ieri alle {ora}", {"ora": hour}
+    shown = then.strftime("%Y-%m-%d %H:%M")
+    return f"il {shown}", "il {istante}", {"istante": shown}
+
+
+def _quiet_parts(last_success: str, now: datetime) -> tuple[str, str]:
+    then = _parse_stamp(last_success)
+    if then is None:
+        return "", ""
+    seconds = max(0, int((now - then).total_seconds()))
+    hours = seconds // 3600
+    if hours >= 48:
+        return str(hours // 24), "giorni"
+    if hours >= 1:
+        return str(hours), "ore"
+    return str(seconds // 60), "minuti"
+
+
+def run_pace(
+    now: datetime,
+    schedule_at: str | None,
+    schedule_minutes: int,
+    last_run: str | None,
+    last_success: str | None,
+    last_error_at: str | None,
+    last_error_detail: str | None,
+) -> dict:
+    coming = next_run(schedule_at, schedule_minutes, last_run, now)
+    if last_success and _parse_stamp(last_success):
+        when_text, when_key, when_params = _success_when(last_success, now)
+        amount, unit = _quiet_parts(last_success, now)
+        sentence = f"Ultimo successo {when_text}, tace da {amount} {unit}."
+        quiet = {
+            "text": sentence,
+            "textKey": "Ultimo successo {quando}, tace da {n} {unita}.",
+            "textParams": {"quandoKey": when_key, "n": amount, "unita": unit, **when_params},
+        }
+    else:
+        sentence = "Non c'è ancora un successo."
+        quiet = {"text": sentence, "textKey": "Non c'è ancora un successo.", "textParams": {}}
+    if last_error_at:
+        shown = str(last_error_at)[:16]
+        detail = str(last_error_detail or "").strip()
+        if detail:
+            error = {
+                "text": f"il {shown}: {detail}",
+                "textKey": "il {quando}: {dettaglio}",
+                "textParams": {"quando": shown, "dettaglio": detail},
+            }
+        else:
+            error = {"text": f"il {shown}", "textKey": "il {quando}", "textParams": {"quando": shown}}
+    else:
+        error = {"text": "nessuno", "textKey": "nessuno", "textParams": {}}
+    return {"next": coming, "quiet": quiet, "error": error, "sentence": sentence}
+
+
+def skip_without_date(modified_at: str, espo_id: str, stamp: str, last_id: str) -> bool:
+    if modified_at or stamp or not last_id or not espo_id:
+        return False
+    return espo_id <= last_id
+
+
+def remote_file_names(names: list[str]) -> list[str]:
+    found = []
+    for name in names:
+        raw = str(name or "").replace("\\", "/").strip("/")
+        lowered = raw.lower()
+        if lowered.startswith("elaborati/") or "/elaborati/" in f"/{lowered}":
+            continue
+        clean = raw.split("/")[-1]
+        if not clean or clean.startswith("."):
+            continue
+        if clean.lower().endswith((".csv", ".xlsx")):
+            found.append(clean)
+    return sorted(set(found), key=str.lower)
+
+
+def rows_from_bytes(name: str, data: bytes) -> tuple[list[str], list[dict]]:
+    if str(name).lower().endswith(".xlsx"):
+        return rows_from_xlsx(data)
+    text = data.decode("utf-8-sig")
+    sample = text.splitlines()[:1]
+    delimiter = ";" if (sample and sample[0].count(";") > sample[0].count(",")) else ","
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    headers = [item.strip() for item in (reader.fieldnames or []) if item and str(item).strip()]
+    rows = [{key: value for key, value in row.items() if key} for row in reader]
+    return headers, rows
+
+
+def rows_from_xlsx(data: bytes) -> tuple[list[str], list[dict]]:
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(io.BytesIO(data)) as book:
+        names = set(book.namelist())
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in names:
+            root = ET.fromstring(book.read("xl/sharedStrings.xml"))
+            for node in root.findall("m:si", ns):
+                shared.append("".join(item.text or "" for item in node.findall(".//m:t", ns)))
+        sheet_name = "xl/worksheets/sheet1.xml"
+        if sheet_name not in names:
+            sheets = sorted(name for name in names if name.startswith("xl/worksheets/sheet"))
+            if not sheets:
+                return [], []
+            sheet_name = sheets[0]
+        root = ET.fromstring(book.read(sheet_name))
+    grid: list[dict[str, str]] = []
+    for row in root.findall("m:sheetData/m:row", ns):
+        cells: dict[str, str] = {}
+        for cell in row.findall("m:c", ns):
+            ref = cell.get("r") or ""
+            column = "".join(char for char in ref if char.isalpha())
+            if not column:
+                continue
+            kind = cell.get("t")
+            value = cell.find("m:v", ns)
+            inline = cell.find("m:is", ns)
+            if kind == "s" and value is not None and value.text and value.text.isdigit():
+                index = int(value.text)
+                text = shared[index] if index < len(shared) else ""
+            elif kind == "inlineStr" and inline is not None:
+                text = "".join(item.text or "" for item in inline.findall(".//m:t", ns))
+            elif value is not None and value.text is not None:
+                text = value.text
+            else:
+                text = ""
+            cells[column] = text
+        grid.append(cells)
+    if not grid:
+        return [], []
+    letters: list[str] = []
+    for cells in grid:
+        for column in cells:
+            if column not in letters:
+                letters.append(column)
+    letters.sort(key=lambda name: (len(name), name))
+    paired = [(column, grid[0].get(column, "").strip()) for column in letters]
+    paired = [(column, header) for column, header in paired if header]
+    rows = [{header: cells.get(column, "") for column, header in paired} for cells in grid[1:]]
+    return [header for _column, header in paired], rows
+
+
+def csv_bytes(rows: list[dict]) -> bytes:
+    headers: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in headers:
+                headers.append(str(key))
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=headers, lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({key: "" if row.get(key) is None else row.get(key) for key in headers})
+    return buffer.getvalue().encode("utf-8")
+
+
+def quote_ident(name: str, engine: str) -> str:
+    if engine in ("postgres", "oracle"):
+        return f'"{name}"'
+    if engine == "mssql":
+        return f"[{name}]"
+    return f"`{name}`"
+
+
+def page_sql(source: str, engine: str, where: str, order: str, limit: int, offset: int) -> str:
+    if engine == "oracle":
+        return (
+            f"SELECT * FROM ({source}) sorgente {where} {order} "
+            f"OFFSET {int(offset)} ROWS FETCH NEXT {int(limit)} ROWS ONLY"
+        )
+    if engine == "mssql":
+        order_by = order or "ORDER BY (SELECT NULL)"
+        return (
+            f"SELECT * FROM ({source}) AS sorgente {where} {order_by} "
+            f"OFFSET {int(offset)} ROWS FETCH NEXT {int(limit)} ROWS ONLY"
+        )
+    return (
+        f"SELECT * FROM ({source}) AS sorgente {where} {order} "
+        f"LIMIT {int(limit)} OFFSET {int(offset)}"
+    )
+
+
+ENGINES = ("mysql", "postgres", "mssql", "oracle")
+
+
+def engine_port(engine: str) -> int:
+    return {"postgres": 5432, "mssql": 1433, "oracle": 1521}.get(engine, 3306)
 
 
 def identity_preview(rows: list[dict], columns: list[str], limit: int = 3) -> list[str]:

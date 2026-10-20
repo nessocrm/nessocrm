@@ -201,7 +201,7 @@
   <script>
     let lang = localStorage.getItem("nesso-lang") === "en" ? "en" : "it";
     let en = {};
-    const kindLabel = { webhook: "Webhook", database: "Database", csv: "File CSV", pdf: "PDF sul cliente", http: "Uscita HTTP" };
+    const kindLabel = { webhook: "Webhook", database: "Database", csv: "File CSV", pdf: "PDF sul cliente", http: "Uscita HTTP", sftp: "SFTP", ftps: "FTPS" };
     const phrases = { creato: "Creato in Espo", aggiornato: "Aggiornato", invariato: "Invariato", synced: "Sincronizzato", inviato: "Inviato", ricevuto: "Ricevuto", scartato: "Scartato", errore: "Errore", ok: "Riuscito", lettura: "Solo lettura", conferma: "Chiusure da confermare", "in coda": "In coda da guardare", mancante: "File atteso non arrivato" };
     const main = document.querySelector("#contenuto");
     const dialog = document.querySelector("#conferma");
@@ -240,6 +240,13 @@
         .replace(/(\d+) solo in Espo/g, "$1 only in Espo")
         .replace(/(\d+) in sorgente/g, "$1 in the source")
         .replace(/scarto importi ([0-9.\-]+)/g, "amount gap $1");
+    }
+    function paceLine(line) {
+      if (!line) return "";
+      const params = Object.assign({}, line.textParams || {});
+      if (params.quandoKey) params.quando = t(params.quandoKey, params);
+      if (params.unita) params.unita = t(params.unita);
+      return frase({ text: line.text, textKey: line.textKey, textParams: params });
     }
     function t(source, vars) {
       const raw = String(source ?? "");
@@ -439,6 +446,7 @@
       if (item.url) detail = `<dt>Indirizzo</dt><dd><code>${esc(item.url)}</code><br><span class="hint">Dallo al sistema esterno. Chi lo ha può inviare dati.</span></dd>`;
       if (item.inboxUrl) detail = `<dt>Casella</dt><dd><code>${esc(item.inboxUrl)}</code><br><span class="hint">Usata se non indichi un altro indirizzo di destinazione.</span></dd>`;
       if (item.kind === "csv" || item.kind === "pdf") detail = `<dt>Cartella</dt><dd>scambio/${esc(item.id)}</dd>`;
+      if (item.kind === "sftp" || item.kind === "ftps") detail = `<dt>Cartella remota</dt><dd>${esc(item.config.host || "")}:${esc(item.config.path || "")}</dd>`;
       if (item.kind === "database") detail = `<dt>Query</dt><dd><code>${esc(item.config.query || "")}</code></dd>`;
       return `<article class="panel">
         <h2>${esc(item.name)}</h2>
@@ -479,18 +487,41 @@
             <legend>Tipo</legend>
             <label><input type="radio" name="kind" value="webhook" ${kind === "webhook" ? "checked" : ""}> Webhook. Il sistema esterno chiama un indirizzo.</label>
             <label><input type="radio" name="kind" value="database" ${kind === "database" ? "checked" : ""}> Database. Il motore legge una SELECT. Non scrive sul database.</label>
-            <label><input type="radio" name="kind" value="csv" ${kind === "csv" ? "checked" : ""}> File CSV. Depositi un file in una cartella. Virgola o punto e virgola.</label>
+            <label><input type="radio" name="kind" value="csv" ${kind === "csv" ? "checked" : ""}> File CSV o Excel. Depositi un .csv o un .xlsx in una cartella.</label>
+            <label><input type="radio" name="kind" value="sftp" ${kind === "sftp" ? "checked" : ""}> SFTP. Il motore legge e deposita i file su un server.</label>
+            <label><input type="radio" name="kind" value="ftps" ${kind === "ftps" ? "checked" : ""}> FTPS. Come SFTP, sul protocollo FTP con TLS.</label>
             <label><input type="radio" name="kind" value="pdf" ${kind === "pdf" ? "checked" : ""}> PDF sul cliente. Il nome del file contiene la chiave dell'azienda.</label>
             <label><input type="radio" name="kind" value="http" ${kind === "http" ? "checked" : ""}> Destinazione HTTP. Espo manda i dati fuori.</label>
           </fieldset>
           <div id="db-fields" hidden>
+            <label>Motore
+              <select name="engine">
+                <option value="mysql" ${!config.engine || config.engine === "mysql" ? "selected" : ""}>MySQL o MariaDB</option>
+                <option value="postgres" ${config.engine === "postgres" ? "selected" : ""}>Postgres</option>
+                <option value="mssql" ${config.engine === "mssql" ? "selected" : ""}>SQL Server</option>
+                <option value="oracle" ${config.engine === "oracle" ? "selected" : ""}>Oracle</option>
+              </select>
+            </label>
             <label>Server <input name="host" autocomplete="off" value="${esc(config.host || "")}"></label>
             <label>Porta <input name="port" value="${esc(config.port || "3306")}" inputmode="numeric"></label>
             <label>Database <input name="database" autocomplete="off" value="${esc(config.database || "")}"></label>
             <label>Utente <input name="user" autocomplete="off" value="${esc(config.user || "")}"></label>
             <label>Password <input name="password" type="password" autocomplete="new-password" placeholder="${config.hasPassword ? "Lascia vuoto per non cambiarla" : ""}"></label>
             <label>Query SELECT <textarea name="query">${esc(config.query || "")}</textarea></label>
-            <p class="hint">Su questa prova il server è <code>db</code>, il database è <code>gestionale</code>, l'utente è <code>espocrm</code> e la password è <code>locale-db</code>.</p>
+            <label><input name="tls" type="checkbox" ${config.tls ? "checked" : ""}> TLS</label>
+            <label>Tunnel SSH, facoltativo <input name="tunnelHost" autocomplete="off" value="${esc(config.tunnelHost || "")}"></label>
+            <label>Porta del tunnel <input name="tunnelPort" value="${esc(config.tunnelPort || "")}" inputmode="numeric"></label>
+            <label>Utente del tunnel <input name="tunnelUser" autocomplete="off" value="${esc(config.tunnelUser || "")}"></label>
+            <label>Password del tunnel <input name="tunnelPassword" type="password" autocomplete="new-password" placeholder="${config.hasTunnelPassword ? "Lascia vuoto per non cambiarla" : ""}"></label>
+            <p class="hint">Su questa prova il server è <code>db</code>, il database è <code>gestionale</code>, l'utente è <code>espocrm</code> e la password è <code>locale-db</code>. Senza TLS e senza tunnel resta il collegamento di prima. Il motore esegue solo la SELECT.</p>
+          </div>
+          <div id="file-fields" hidden>
+            <label>Server <input name="fileHost" autocomplete="off" value="${esc(config.host || "")}"></label>
+            <label>Porta <input name="filePort" value="${esc(config.port || (kind === "ftps" ? "21" : "22"))}" inputmode="numeric"></label>
+            <label>Utente <input name="fileUser" autocomplete="off" value="${esc(config.user || "")}"></label>
+            <label>Password <input name="filePassword" type="password" autocomplete="new-password" placeholder="${config.hasPassword ? "Lascia vuoto per non cambiarla" : ""}"></label>
+            <label>Cartella remota <input name="path" autocomplete="off" value="${esc(config.path || "")}"></label>
+            <p class="hint">Si leggono i .csv e i .xlsx in quella cartella. Dopo il giro il file va in elaborati, sullo stesso server. In uscita Nesso deposita un CSV.</p>
           </div>
           <div id="http-fields" hidden>
             <label>Indirizzo di destinazione
@@ -529,8 +560,14 @@
         document.querySelector("#db-fields").hidden = chosen !== "database";
         document.querySelector("#http-fields").hidden = chosen !== "http";
         document.querySelector("#pdf-fields").hidden = chosen !== "pdf";
+        document.querySelector("#file-fields").hidden = chosen !== "sftp" && chosen !== "ftps";
       };
       form.addEventListener("change", show);
+      if (form.engine) form.engine.addEventListener("change", () => {
+        const ports = { mysql: "3306", postgres: "5432", mssql: "1433", oracle: "1521" };
+        const current = form.port.value.trim();
+        if (!current || Object.values(ports).includes(current)) form.port.value = ports[form.engine.value] || "3306";
+      });
       show();
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -538,7 +575,29 @@
         if (existing) body.id = existing.id;
         if (!body.name) return showError("Scrivi il nome.");
         if (body.kind === "database") {
-          body.config = { host: form.host.value.trim(), port: form.port.value.trim(), database: form.database.value.trim(), user: form.user.value.trim(), password: form.password.value, query: form.query.value.trim() };
+          body.config = {
+            host: form.host.value.trim(),
+            port: form.port.value.trim(),
+            database: form.database.value.trim(),
+            user: form.user.value.trim(),
+            password: form.password.value,
+            query: form.query.value.trim(),
+            engine: form.engine.value,
+            tls: form.tls.checked,
+            tunnelHost: form.tunnelHost.value.trim(),
+            tunnelPort: form.tunnelPort.value.trim(),
+            tunnelUser: form.tunnelUser.value.trim(),
+            tunnelPassword: form.tunnelPassword.value
+          };
+        }
+        if (body.kind === "sftp" || body.kind === "ftps") {
+          body.config = {
+            host: form.fileHost.value.trim(),
+            port: form.filePort.value.trim(),
+            user: form.fileUser.value.trim(),
+            password: form.filePassword.value,
+            path: form.path.value.trim()
+          };
         }
         if (body.kind === "http") {
           body.config = {
@@ -700,6 +759,7 @@
               <dt>Quando</dt><dd>${esc(when)}</dd>
               ${before ? `<dt>Prima</dt><dd>${esc(before.name)}</dd>` : ""}
               <dt>Esito</dt><dd>${esc(outcome)}${summary ? ". " + esc(summary) : ""}${item.read_only ? ". " + esc(t("Modalità lettura")) : ""}</dd>
+              ${item.pace ? `<dt>Prossimo giro</dt><dd>${esc(paceLine(item.pace.next))}</dd><dt>Silenzio</dt><dd>${esc(paceLine(item.pace.quiet))}</dd><dt>Ultimo errore</dt><dd>${esc(paceLine(item.pace.error))}</dd>` : ""}
               ${balance ? `<dt>Quadratura</dt><dd>${esc(balance)}</dd>` : ""}
               ${late ? `<dt>File</dt><dd>${esc(late)}</dd>` : ""}
               ${item.silence_held ? `<dt>Attesa</dt><dd>${esc(t("File in attesa. Conferma per scriverlo, oppure scartalo."))}</dd>` : ""}
@@ -1313,7 +1373,7 @@
         </label>
         ${outbound ? "" : `<label>Colonna di variazione, facoltativa
           <input name="cursorColumn" value="${esc(draft.cursorColumn || "")}" list="colonne" autocomplete="off">
-          <span class="hint">Se la indichi, il database non viene riletto tutto: si riparte dall'ultimo valore. Vale per MySQL e MariaDB.</span>
+          <span class="hint">Se la indichi, il database non viene riletto tutto: si riparte dall'ultimo valore. Vale per MySQL, MariaDB, Postgres, SQL Server e Oracle.</span>
         </label>
         <label>Se Espo ha già un record simile
           <select name="onDuplicate">

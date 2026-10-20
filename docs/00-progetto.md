@@ -31,7 +31,7 @@ La scheda si crea dalla schermata Schede, con singolare e plurale, oppure ancora
 
 L'identità di un record in ingresso è `{id integrazione}:{valore esterno}`. Sulle schede standard il campo è `cExternalKey`. Sulle schede create da Nesso è `externalKey`. Sulle schede che Espo non lascia personalizzare (team, cartelle, categorie, ruoli, modelli email) la chiave sta solo nella tabella `chiave` del motore. Lo stesso valore, con gli stessi campi, non richiama Espo: resta `invariato`. Se i campi cambiano, Nesso fa `PUT` sullo stesso record.
 
-L'uscita ricorda l'ultimo `modifiedAt` insieme all'id Espo. Un giro legge a pagine da 50, senza saltare i record che hanno lo stesso istante. Il cursore dell'invio HTTP avanza solo dopo i POST riusciti: quello che non è partito esce al giro dopo.
+L'uscita ricorda l'ultimo `modifiedAt` insieme all'id Espo. Un giro legge a pagine da 50, senza saltare i record che hanno lo stesso istante. Se la data manca, il cursore avanza sull'id già consegnato e il giornale lo dice. Il cursore dell'invio HTTP avanza solo dopo i POST riusciti: quello che non è partito esce al giro dopo.
 
 La cadenza è manuale, 5 minuti, 15 minuti, un'ora, oppure un orario fisso. Un'integrazione può dichiarare quale altra deve partire prima. Si può mettere in pausa: il pianificatore e il webhook la saltano, «Esegui ora» no. Un interruttore ferma ogni scrittura verso Espo, e una modalità lettura fa lo stesso per una integrazione. L'interfaccia ha il menu laterale di Espo. Si crea e si modifica un'integrazione in quattro passi. Nell'abbinamento si copia un campo, si prende la prima parola o il resto, si scrive un valore fisso, si mappa un elenco, si collega una scheda, più record, un'attività, oppure si dice il team e la persona. Ogni campo ha un padrone. Un telefono italiano viene messo in forma `+39`. Una data si legge in tre formati. La prova a secco mostra le prime righe senza scrivere su Espo. L'anteprima conta il giro intero. Attività elenca anche le righe scartate, i contrasti e gli ultimi giri. La configurazione si scarica e si ricarica, senza le password.
 
@@ -41,7 +41,6 @@ L'istanza locale è l'immagine pubblica `espocrm/espocrm:10.0`, installata vuota
 
 ### Difetti noti di questa versione
 
-- Se Espo non restituisce `modifiedAt`, il cursore di uscita non si muove e il giro dopo rimanda gli stessi record.
 - `/api/pull` scrive il sink e avanza il cursore, perché lì la consegna è la lettura stessa. L'invio HTTP no: il cursore si muove solo dopo i POST riusciti.
 - Gira una esecuzione alla volta. La seconda riceve «un'esecuzione è già in corso».
 - La password del database esterno è in chiaro nel file SQLite del volume locale.
@@ -85,6 +84,12 @@ I giri scrivono su Espo con l'utente `nesso`, creato via API, non con l'admin. L
 Un giro fallito accende in home un avviso con il nome dell'integrazione, una volta, non una volta per riga scartata. Se sull'integrazione si scrive «avvisa se tace da più di» tot minuti, e l'ultimo successo è più vecchio, compare un secondo avviso. La posta del motore, quando ci sarà, si aggancia a `deliver_notice`. Oggi quella funzione non invia, e non usa la posta di Espo.
 
 I test sono nella classe `IngressoRuoloAvviso` e nei giri `senza ingresso`, `il giro fallito` e `la scrittura`.
+
+### Stato e canali, 20 ottobre 2026
+
+In elenco, per ogni integrazione: il prossimo giro, l'ultimo successo, l'ultimo errore, e da quanto tace. Il silenzio si conta dall'ultimo successo. Un giro fallito non viene contato come attività. Senza data di modifica il cursore di uscita segue l'id già consegnato, e il giro dopo non rimanda gli stessi record.
+
+Il file in cartella può essere CSV o Excel. SFTP e FTPS leggono gli stessi file e, dopo il giro, li spostano in `elaborati/` sul server. In uscita depositano un CSV. La password non entra nello scarico. Il database resta una SELECT: MySQL e MariaDB come prima se non si sceglie altro, e in più Postgres, SQL Server e Oracle. TLS e un tunnel SSH si accendono sul collegamento; spenti, la connessione è quella di prima. I test sono nella classe `StatoECanali` e nei giri `xlsx`, `senza modified at` e `mysql senza tls`.
 
 ### Accensione, 19 ottobre 2026
 
@@ -143,7 +148,6 @@ Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. 
 
 ### Uso
 
-- Prossimo giro, ultimo successo, ultimo errore, da quanto tace.
 - Ripetere una sola riga scartata, senza rilanciare tutto il file.
 - Errore col nome del campo.
 - Prova a secco del webhook: incollare un esempio. Oggi risponde che non ha righe.
@@ -155,8 +159,6 @@ Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. 
 
 ### Canali
 
-- SFTP e FTPS, in lettura e in deposito. Excel, non solo CSV.
-- Postgres, SQL Server, Oracle. TLS e tunnel, anche su MySQL.
 - HTTP firmato in ingresso. OAuth in uscita.
 - Scrittura di ritorno sulla sorgente, spenta finché non si accende.
 - Il documento come canale, con cartella e visibilità. Il percorso di un file locale si può già caricare su un campo file.

@@ -33,7 +33,7 @@ Cursori presenti il 17/10/2026:
 | `contatti-da-espo` | 2026-10-17 10:14:23 |
 | `lead-verso-portale` | 2026-10-17 10:53:11 |
 
-Il select chiede sempre `id` e `modifiedAt`, anche se l'abbinamento non li mappa. Se un record non ha `modifiedAt`, il cursore non avanza su quel record.
+Il select chiede sempre `id` e `modifiedAt`, anche se l'abbinamento non li mappa. Se un record non ha `modifiedAt`, il cursore avanza comunque sull'id già consegnato e il dettaglio del giro dice che manca la data. Il giro dopo quell'id non esce di nuovo.
 
 ## Invio
 

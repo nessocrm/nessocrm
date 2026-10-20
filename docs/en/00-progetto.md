@@ -31,7 +31,7 @@ The entity is created from the Entities screen, with singular and plural, or sti
 
 The identity of an inbound record is `{integration id}:{external value}`. On standard entities the field is `cExternalKey`. On entities created by Nesso it is `externalKey`. On entities that Espo does not let you customise (teams, folders, categories, roles, email templates) the key lives only in the engine `chiave` table. The same value, with the same fields, does not call Espo again: it stays `invariato`. If the fields change, Nesso does `PUT` on the same record.
 
-Outbound remembers the last `modifiedAt` together with the Espo id. A run reads pages of 50, without skipping records that share the same instant. The HTTP send cursor moves only after the POSTs that succeeded: what did not leave goes out on the next run.
+Outbound remembers the last `modifiedAt` together with the Espo id. A run reads pages of 50, without skipping records that share the same instant. If the date is missing, the cursor advances on the id already delivered and the journal says so. The HTTP send cursor moves only after the POSTs that succeeded: what did not leave goes out on the next run.
 
 The cadence is manual, 5 minutes, 15 minutes, one hour, or a fixed time. An integration can declare which other one must start first. It can be paused: the scheduler and the webhook skip it, "Run now" does not. A switch stops every write toward Espo, and a read mode does the same for one integration. The interface has the Espo side menu. An integration is created and edited in four steps. In the mapping you copy a field, take the first word or the rest, write a fixed value, map a list, link an entity, several records, an activity, or name the team and the person. Every field has an owner. An Italian phone number is rewritten as `+39`. A date is read in three formats. The dry run shows the first rows without writing to Espo. The preview counts the whole run. Activity also lists rejected rows, conflicts and the latest runs. The configuration is downloaded and uploaded again, without the passwords.
 
@@ -41,7 +41,6 @@ The local instance is the public image `espocrm/espocrm:10.0`, installed empty. 
 
 ### Known defects of this version
 
-- If Espo does not return `modifiedAt`, the outbound cursor does not move and the next run sends the same records again.
 - `/api/pull` writes the sink and advances the cursor, because there the delivery is the read itself. The HTTP send does not: the cursor moves only after the POSTs that succeeded.
 - One run at a time. The second receives "a run is already in progress".
 - The external database password is in clear text in the SQLite file of the local volume.
@@ -85,6 +84,12 @@ Runs write to Espo as the user `nesso`, created through the API, not as the admi
 A failed run lights a notice on home with the integration's name, once, not once per rejected row. If the integration says "warn if it stays quiet for more than" so many minutes, and the last success is older, a second notice appears. The engine mail, when it exists, attaches to `deliver_notice`. Today that function does not send, and it does not use Espo's mail.
 
 The tests are in the class `IngressoRuoloAvviso` and in the runs `senza ingresso`, `il giro fallito` and `la scrittura`.
+
+### Status and channels, 20 October 2026
+
+In the list, for each integration: the next run, the last success, the last error, and how long it has been quiet. Quiet is counted from the last success. A failed run is not counted as activity. Without a modification date the outbound cursor follows the id already delivered, and the next run does not send the same records again.
+
+A file in the folder can be CSV or Excel. SFTP and FTPS read the same files and, after the run, move them to `elaborati/` on the server. Outbound, they drop a CSV. The password does not enter the download. The database stays a SELECT: MySQL and MariaDB as before if nothing else is chosen, and also Postgres, SQL Server and Oracle. TLS and an SSH tunnel are switched on the connection; off, the connection is the one from before. The tests are in the class `StatoECanali` and in the runs `xlsx`, `senza modified at` and `mysql senza tls`.
 
 ### Switch-on, 19 October 2026
 
@@ -143,7 +148,6 @@ An item stays here until it is in the engine. Those already closed are not repea
 
 ### Use
 
-- Next run, last success, last error, how long it has been silent.
 - Repeat a single rejected row, without replaying the whole file.
 - An error with the field name.
 - Dry run of the webhook: paste an example. Today it answers that it has no rows.
@@ -155,8 +159,6 @@ An item stays here until it is in the engine. Those already closed are not repea
 
 ### Channels
 
-- SFTP and FTPS, for reading and for drop-off. Excel, not only CSV.
-- Postgres, SQL Server, Oracle. TLS and a tunnel, also on MySQL.
 - Signed HTTP inbound. OAuth outbound.
 - Write-back on the source, off until it is switched on.
 - The document as a channel, with folder and visibility. The path of a local file can already be uploaded to a file field.
