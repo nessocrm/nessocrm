@@ -1304,6 +1304,29 @@ def engine_port(engine: str) -> int:
     return {"postgres": 5432, "mssql": 1433, "oracle": 1521}.get(engine, 3306)
 
 
+def sign_body(secret: str, body: bytes) -> str:
+    return hmac.new(str(secret).encode(), body, hashlib.sha256).hexdigest()
+
+
+def signature_matches(secret: str, body: bytes, presented: str) -> bool:
+    if not secret:
+        return True
+    shown = str(presented or "").strip()
+    if shown.lower().startswith("sha256="):
+        shown = shown.split("=", 1)[1].strip()
+    expected = sign_body(secret, body)
+    if len(shown) != len(expected):
+        return False
+    return hmac.compare_digest(expected, shown)
+
+
+def oauth_expired(obtained_at: str | None, expires_in: int, now: datetime, skew: int = 30) -> bool:
+    then = _parse_stamp(obtained_at)
+    if then is None or int(expires_in or 0) <= 0:
+        return True
+    return (now - then).total_seconds() >= int(expires_in) - skew
+
+
 def identity_preview(rows: list[dict], columns: list[str], limit: int = 3) -> list[str]:
     shown = []
     for row in rows:

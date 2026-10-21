@@ -8,13 +8,13 @@ Il verso ammesso sull'integrazione: `http` solo `out`, `sftp` e `ftps` in entram
 
 Pensato per un sistema che chiama appena nasce un dato: un form, un gestionale con un evento.
 
-Alla creazione il motore non chiede parametri. Costruisce:
+Il segreto della firma è facoltativo. Senza, resta solo il token nell'indirizzo. Costruisce:
 
 ```
 {PUBLIC_BASE_URL}/hook/{id}/{token}
 ```
 
-Con i valori di compose, la base è `http://localhost:8091`. L'indirizzo compare sulla scheda del collegamento. Chi lo possiede può inserire dati. Non c'è un secondo fattore.
+Con i valori di compose, la base è `http://localhost:8091`. L'indirizzo compare sulla scheda del collegamento. Chi lo possiede può inserire dati. La firma, quando il segreto c'è, è il controllo in più.
 
 `POST` accetta:
 
@@ -26,6 +26,8 @@ Con i valori di compose, la base è `http://localhost:8091`. L'indirizzo compare
 | altro | HTTP 400 «il corpo deve essere un oggetto o un elenco» |
 
 Il token è confrontato in tempo costante (`hmac.compare_digest`). Collegamento inesistente, kind diverso, token diverso: HTTP 401 «collegamento non valido».
+
+Se `signSecret` è valorizzato, il corpo grezzo deve arrivare con l'intestazione `X-Nesso-Firma`: HMAC-SHA256 in esadecimale, anche con il prefisso `sha256=`. Firma assente o diversa: HTTP 401 «firma non valida», e non nasce un giro. Senza segreto il webhook di prima continua a entrare. Il segreto non compare nello scarico.
 
 Se nessuna integrazione in ingresso punta a questo id: HTTP 400 «nessuna integrazione usa questo collegamento». Il corpo non viene conservato.
 
@@ -125,6 +127,8 @@ L'unico parametro è `url`. Vuoto è ammesso. Se è valorizzato deve iniziare co
 URL vuoto: il giro spedisce alla casella del motore, descritta nel capitolo uscita. La scheda mostra `inboxUrl` pubblico (`localhost`), mentre l'invio interno usa `127.0.0.1` e la porta del processo. Sono lo stesso server. Nel dettaglio dell'ultimo giro si vede l'indirizzo interno.
 
 URL valorizzato: un POST per record, e la casella di questo collegamento non riceve nulla, a meno che l'URL non sia proprio quello della casella.
+
+L'autenticazione è nessuna, Bearer, utente e password, oppure un'intestazione. Con OAuth il motore chiede il token all'indirizzo indicato, con le credenziali client, e lo rinnova quando è scaduto. Poi il JSON esce come prima, con `Authorization: Bearer`. Client secret e token non entrano nel giornale né nello scarico. Senza OAuth l'invio resta quello di prima.
 
 «Esegui ora» con zero record nuovi risponde `sent: 0` e stato `ok`. Non è un errore.
 

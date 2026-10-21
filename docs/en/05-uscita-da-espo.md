@@ -43,7 +43,7 @@ Only kind `http` sends. The address is `config.url` if it is set. If it is empty
 http://127.0.0.1:8091/inbox/{connection id}/{token}
 ```
 
-It is a JSON POST, header `Content-Type: application/json`, timeout 20 seconds. On the connection you can add a Bearer, user and password, or a header with name and value. The token in the address stays only for the internal inbox.
+It is a JSON POST, header `Content-Type: application/json`, timeout 20 seconds. On the connection you can add a Bearer, user and password, a header, or OAuth client credentials. The OAuth token is renewed when it has expired, and then the JSON goes out as before. The token in the address stays only for the internal inbox.
 
 For each record, after an HTTP under 300:
 
@@ -86,4 +86,4 @@ Wrong token or id, or a kind other than `http`: HTTP 401 "inbox not valid". The 
 
 ## What outbound does not do
 
-It does not delete in Espo. It does not send deletions. It does not follow relations. A run reads up to 1000 records, in pages of 50. The POST can carry Bearer, basic or a header. A failed send does not move the cursor past the last POST that succeeded.
+It does not delete in Espo. It does not send deletions. It does not follow relations. A run reads up to 1000 records, in pages of 50. The POST can carry Bearer, basic, a header or OAuth. A failed send does not move the cursor past the last POST that succeeded.

@@ -43,7 +43,7 @@ Solo il kind `http` invia. L'indirizzo è `config.url` se è valorizzato. Se è 
 http://127.0.0.1:8091/inbox/{id collegamento}/{token}
 ```
 
-È un POST JSON, header `Content-Type: application/json`, timeout 20 secondi. Sul collegamento si può aggiungere un Bearer, utente e password, oppure un'intestazione con nome e valore. Il token nell'indirizzo resta solo per la casella interna.
+È un POST JSON, header `Content-Type: application/json`, timeout 20 secondi. Sul collegamento si può aggiungere un Bearer, utente e password, un'intestazione, oppure OAuth a credenziali client. Il token OAuth si rinnova quando è scaduto, e poi il JSON esce come prima. Il token nell'indirizzo resta solo per la casella interna.
 
 Per ogni record, dopo un HTTP sotto 300:
 
@@ -86,4 +86,4 @@ Token o id errati, o kind diverso da `http`: HTTP 401 «casella non valida». Il
 
 ## Che cosa l'uscita non fa
 
-Non cancella su Espo. Non manda gli eliminati. Non segue le relazioni. Un giro legge fino a 1000 record, a pagine da 50. Il POST può portare Bearer, basic o un'intestazione. Un invio fallito non fa avanzare il cursore oltre l'ultimo POST riuscito.
+Non cancella su Espo. Non manda gli eliminati. Non segue le relazioni. Un giro legge fino a 1000 record, a pagine da 50. Il POST può portare Bearer, basic, un'intestazione o OAuth. Un invio fallito non fa avanzare il cursore oltre l'ultimo POST riuscito.

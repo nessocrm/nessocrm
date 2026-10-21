@@ -43,4 +43,4 @@ On the Espo record, Nesso origin appears: "updated from the ERP" with date and t
 
 On the integration: preview of the run, read mode, undo, confirmation of closes. At the bottom of the page are the switch-on plan and the quiet window. The plan lists up to three integrations already saved: a step is confirmed only after its preview, and the next one stays off until you resume it. The window has two dates and a reason, for one integration or for all. If a file arrived on those days, the card says it is waiting and offers confirm or discard. In Activity, the run summary, the review queue and the journal, including a missing file.
 
-On the HTTP destination the form asks for authentication: none, Bearer, user and password, or a header.
+On the HTTP destination the form asks for authentication: none, Bearer, user and password, a header, or OAuth client credentials. On the webhook the signing secret is optional: empty, the token in the address stays.

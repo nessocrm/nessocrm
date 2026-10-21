@@ -107,8 +107,8 @@ Universale, qui, ha un senso preciso.
 
 ## Che cosa questa versione tiene fisso
 
-- I tipi di canale sono webhook, database, CSV, Excel, SFTP, FTPS, PDF sul cliente e HTTP in uscita. Il database è MySQL, MariaDB, Postgres, SQL Server o Oracle, solo in lettura. Non c'è una coda, non c'è OAuth.
-- Il database letto è MySQL o MariaDB, e solo in SELECT.
+- I tipi di canale sono webhook, database, CSV, Excel, SFTP, FTPS, PDF sul cliente e HTTP in uscita. Il database è MySQL, MariaDB, Postgres, SQL Server o Oracle, solo in lettura. Non c'è una coda. OAuth in uscita c'è, a credenziali client, e solo se si sceglie sul collegamento.
+- Il database si legge solo in SELECT. Senza TLS e senza tunnel, MySQL e MariaDB restano la connessione di prima.
 - Il motore non scrive sul sistema sorgente.
 - Se Espo rifiuta un record perché ne esiste uno simile con un'altra chiave, la riga viene scartata, salvo che l'integrazione sia impostata per aggiornare quel record.
 - La cadenza ha quattro intervalli: 0, 5, 15, 60 minuti. In più si può indicare un orario fisso, per esempio 02:10.

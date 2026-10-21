@@ -20,10 +20,10 @@ A **connection** is the channel. An **integration** is the rule: which connectio
 
 | Channel | Direction | Behaviour already working |
 |---|---|---|
-| Webhook | into Espo | Address with a token. Body as an object, a list, or `{records:[]}` |
+| Webhook | into Espo | Address with a token. Body as an object, a list, or `{records:[]}`. If there is a secret, the body must carry the signature |
 | Database | into Espo | One SELECT on MySQL or MariaDB, read in pages of 200 until the end. The engine does not write on that database |
 | CSV file | into Espo | Folder `scambio/{id}`, UTF-8, comma or semicolon. After the run the file goes to `elaborati/`, even if some row was rejected. If a required column is missing the file stays where it is |
-| HTTP | out of Espo | JSON POST toward an address, or toward the local inbox. Bearer, user and password, or a header can be added |
+| HTTP | out of Espo | JSON POST toward an address, or toward the local inbox. Bearer, user and password, a header, or OAuth client credentials can be added |
 
 The entity is not written in the code. Nesso reads the Espo metadata and offers the entities that have a tab and the writable fields.
 
@@ -90,6 +90,10 @@ The tests are in the class `IngressoRuoloAvviso` and in the runs `senza ingresso
 In the list, for each integration: the next run, the last success, the last error, and how long it has been quiet. Quiet is counted from the last success. A failed run is not counted as activity. Without a modification date the outbound cursor follows the id already delivered, and the next run does not send the same records again.
 
 A file in the folder can be CSV or Excel. SFTP and FTPS read the same files and, after the run, move them to `elaborati/` on the server. Outbound, they drop a CSV. The password does not enter the download. The database stays a SELECT: MySQL and MariaDB as before if nothing else is chosen, and also Postgres, SQL Server and Oracle. TLS and an SSH tunnel are switched on the connection; off, the connection is the one from before. The tests are in the class `StatoECanali` and in the runs `xlsx`, `senza modified at` and `mysql senza tls`.
+
+### Signature and OAuth, 21 October 2026
+
+A webhook without a signing secret stays on the address with the token. If the secret is set, the body must arrive with the `X-Nesso-Firma` header: HMAC-SHA256 of the body, in hexadecimal, also with the `sha256=` prefix. A missing or different signature: HTTP 401, and no run starts. Outbound HTTP keeps no authentication, Bearer, user and password, and a header. In addition, OAuth client credentials: the token is requested again when it has expired, then the JSON goes out as before. The secret, the client secret and the token do not enter the journal or the download. The tests are in the class `FirmaEOauth`.
 
 ### Switch-on, 19 October 2026
 
@@ -159,7 +163,6 @@ An item stays here until it is in the engine. Those already closed are not repea
 
 ### Channels
 
-- Signed HTTP inbound. OAuth outbound.
 - Write-back on the source, off until it is switched on.
 - The document as a channel, with folder and visibility. The path of a local file can already be uploaded to a file field.
 - The local inbox delivers the JSON to another integration. Today it accumulates it and stops.

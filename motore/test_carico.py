@@ -594,5 +594,22 @@ class StatoECanali(unittest.TestCase):
         self.assertEqual(carico.engine_port("postgres"), 5432)
 
 
+class FirmaEOauth(unittest.TestCase):
+    def test_senza_segreto_la_firma_non_si_chiede(self):
+        body = b'{"codice":"1"}'
+        self.assertTrue(carico.signature_matches("", body, ""))
+        self.assertFalse(carico.signature_matches("segretissimo", body, ""))
+        self.assertFalse(carico.signature_matches("segretissimo", body, "00"))
+        signed = carico.sign_body("segretissimo", body)
+        self.assertTrue(carico.signature_matches("segretissimo", body, signed))
+        self.assertTrue(carico.signature_matches("segretissimo", body, "sha256=" + signed))
+
+    def test_il_token_scaduto_si_rinnova_prima_del_margine(self):
+        now = datetime(2026, 10, 21, 10, 0, 0)
+        self.assertTrue(carico.oauth_expired("", 3600, now))
+        self.assertFalse(carico.oauth_expired("2026-10-21 10:00:00", 3600, now))
+        self.assertTrue(carico.oauth_expired("2026-10-21 09:00:00", 3600, now))
+
+
 if __name__ == "__main__":
     unittest.main()

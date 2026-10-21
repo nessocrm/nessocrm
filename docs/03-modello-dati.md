@@ -40,7 +40,7 @@ Le sei colonne da `key_field` in poi non c'erano nella prima creazione. `init_db
 |---|---|
 | `id` | Slug |
 | `name` | Nome in pagina |
-| `kind` | `webhook`, `database`, `csv`, `http` |
+| `kind` | `webhook`, `database`, `csv`, `http`, `pdf`, `sftp`, `ftps` |
 | `config_json` | Vedi sotto. La password del database sta in chiaro in questo file, sul volume locale |
 | `token` | Segreto URL-safe di 24 byte. Nasce alla creazione e non viene rigenerato da un aggiornamento |
 
@@ -48,12 +48,12 @@ Le sei colonne da `key_field` in poi non c'erano nella prima creazione. `init_db
 
 | kind | Contenuto |
 |---|---|
-| webhook | `{}` |
+| webhook | `{}`, oppure `signSecret` se la firma è accesa |
 | csv | `{}` |
-| http | `{"url": ""}` oppure `{"url": "https://..."}` |
+| http | `url`, e l'autenticazione: nessuna, Bearer, basic, intestazione, oppure OAuth (`tokenUrl`, `clientId`, `scope`) |
 | database | `host`, `port`, `database`, `user`, `password`, `query` |
 
-La lettura verso la pagina toglie la password e mette `hasPassword: true`.
+La lettura verso la pagina toglie password, segreto della firma, client secret e token, e mette il segno che ci sono.
 
 ## queue_item
 

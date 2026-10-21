@@ -884,5 +884,143 @@ class StatoCanaliCursore(unittest.TestCase):
         self.assertIn("ssl", calls[1])
 
 
+class FirmaEOauth(unittest.TestCase):
+    def setUp(self):
+        app.DB_PATH = Path(os.environ["DB_PATH"])
+        app.SCAMBIO = Path(os.environ["SCAMBIO_DIR"])
+        app.init_db()
+        with app.connect() as conn:
+            conn.execute("DELETE FROM pipeline")
+            conn.execute("DELETE FROM connection")
+            conn.execute("DELETE FROM queue_item")
+            conn.execute("DELETE FROM silence_window")
+            conn.execute("DELETE FROM delivery")
+            conn.execute("DELETE FROM run_log")
+            conn.execute("DELETE FROM cursor_state")
+            conn.execute("DELETE FROM sink_item")
+        self.saved = (app.espo_request, app.espo_page, app.post_json, app.request_oauth)
+
+    def tearDown(self):
+        app.espo_request, app.espo_page, app.post_json, app.request_oauth = self.saved
+
+    def test_senza_firma_valida_non_scrive_e_con_firma_si(self):
+        calls = []
+
+        def fake(method, path, body=None, query=None):
+            calls.append(method)
+            if method == "POST":
+                return 201, {"id": "esp-firma"}
+            name = path.rstrip("/").rsplit("/", 1)[-1]
+            return 200, {"id": name}
+
+        app.espo_request = fake
+        with app.connect() as conn:
+            conn.execute("DELETE FROM silence_window")
+            conn.execute(
+                """
+                INSERT INTO connection (id, name, kind, config_json, token)
+                VALUES ('firmato', 'Firmato', 'webhook', ?, 'tok')
+                """,
+                (json.dumps({"signSecret": "segretissimo"}),),
+            )
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, enabled)
+                VALUES ('firmato', 'Firmato', 'in', 'Account', 'codice', 'firmato:{codice}', ?, 'cExternalKey', 'firmato', 1)
+                """,
+                ('[{"from":"codice","to":"name","transform":"copy","owner":"sorgente"}]',),
+            )
+        raw = b'{"codice":"1","nome":"Nord"}'
+        with self.assertRaises(PermissionError):
+            app.accept_hook("firmato", "tok", json.loads(raw), raw, "")
+        with app.connect() as conn:
+            parked = conn.execute("SELECT COUNT(*) AS n FROM queue_item WHERE pipeline_id = 'firmato'").fetchone()["n"]
+        self.assertEqual(parked, 0)
+        self.assertEqual(calls, [])
+        signed = app.carico.sign_body("segretissimo", raw)
+        result = app.accept_hook("firmato", "tok", json.loads(raw), raw, signed)
+        self.assertEqual(result["results"][0]["status"], "creato")
+        self.assertIn("POST", calls)
+        plain = app.save_connection({"id": "firmato", "name": "Firmato", "kind": "webhook", "config": {}})
+        self.assertIn("/hook/firmato/", plain["url"])
+        with app.connect() as conn:
+            kept = json.loads(conn.execute("SELECT config_json FROM connection WHERE id = 'firmato'").fetchone()["config_json"])
+        self.assertEqual(kept["signSecret"], "segretissimo")
+
+    def test_oauth_scaduto_rinnova_e_completa_il_post(self):
+        grants = []
+        sent = []
+
+        def fetch(config, grant):
+            grants.append(grant)
+            self.assertEqual(config["clientSecret"], "segreto")
+            return {"access_token": "nuovo", "expires_in": 3600, "refresh_token": "r2"}
+
+        seen = {"n": 0}
+
+        def page(entity, select, where, order_by):
+            seen["n"] += 1
+            if seen["n"] <= 2:
+                return [{"id": "a1", "name": "Nord", "modifiedAt": "2026-10-21 09:00:00"}]
+            return []
+
+        def post(url, payload, headers=None):
+            sent.append((url, payload, headers or {}))
+
+        app.request_oauth = fetch
+        app.espo_page = page
+        app.post_json = post
+        app.save_connection({
+            "name": "Portale",
+            "kind": "http",
+            "config": {
+                "url": "https://example.test/in",
+                "auth": "oauth",
+                "tokenUrl": "https://example.test/token",
+                "clientId": "client",
+                "clientSecret": "segreto",
+                "refreshToken": "rinfresca",
+                "accessToken": "vecchio",
+                "tokenObtained": "2020-01-01 00:00:00",
+                "expiresIn": 60,
+            },
+        })
+        with app.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id)
+                VALUES ('portale', 'Portale', 'out', 'Account', 'codice', 'portale:{codice}', ?, 'cExternalKey', 'portale')
+                """,
+                ('[{"from":"name","to":"nome","transform":"copy","owner":"sorgente"}]',),
+            )
+        result = app.execute_pipeline("portale")
+        self.assertEqual(result["sent"], 1)
+        self.assertEqual(grants, ["refresh_token"])
+        self.assertEqual(sent[0][0], "https://example.test/in")
+        self.assertEqual(sent[0][1], {"nome": "Nord"})
+        self.assertEqual(sent[0][2]["Authorization"], "Bearer nuovo")
+        with app.connect() as conn:
+            stored = json.loads(conn.execute("SELECT config_json FROM connection WHERE id = 'portale'").fetchone()["config_json"])
+            shown = app.public_connection(conn.execute("SELECT * FROM connection WHERE id = 'portale'").fetchone())
+        again = app.fresh_oauth_token("portale", stored)
+        self.assertEqual(again, "nuovo")
+        self.assertEqual(grants, ["refresh_token"])
+        dumped = json.dumps(shown)
+        self.assertNotIn("segreto", dumped)
+        self.assertNotIn("nuovo", dumped)
+        self.assertNotIn("vecchio", dumped)
+        self.assertEqual(shown["config"]["clientSecret"], "")
+        self.assertTrue(shown["config"]["hasClientSecret"])
+        bearer = app.destination_headers({"auth": "bearer", "token": "abc"})
+        self.assertEqual(bearer, {"Authorization": "Bearer abc"})
+        self.assertEqual(app.destination_headers({"auth": "none"}), {})
+        with app.connect() as conn:
+            detail = conn.execute("SELECT detail FROM delivery WHERE pipeline_id = 'portale'").fetchone()["detail"]
+        self.assertNotIn("segreto", detail)
+        self.assertNotIn("nuovo", detail)
+
+
 if __name__ == "__main__":
     unittest.main()

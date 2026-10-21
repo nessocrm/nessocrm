@@ -517,6 +517,20 @@ EN = {
     "motore database non riconosciuto": "database engine not recognised",
     "il driver mssql non è installato": "the SQL Server driver is not installed",
     "manca la data di modifica, il cursore segue l'id": "the modification date is missing, the cursor follows the id",
+    "Segreto della firma, facoltativo": "Signing secret, optional",
+    "Se lo indichi, il corpo deve arrivare con l'intestazione X-Nesso-Firma. Senza segreto resta il token nell'indirizzo.": "If you set it, the body must arrive with the X-Nesso-Firma header. Without a secret the token in the address stays.",
+    "OAuth, credenziali client": "OAuth, client credentials",
+    "Indirizzo del token": "Token address",
+    "Client id": "Client id",
+    "Client secret": "Client secret",
+    "Scope, facoltativo": "Scope, optional",
+    "Il token si chiede di nuovo quando è scaduto. Poi il JSON esce come prima, con Authorization Bearer.": "The token is requested again when it has expired. Then the JSON goes out as before, with Authorization Bearer.",
+    "firma non valida": "invalid signature",
+    "OAuth non ha restituito un token": "OAuth did not return a token",
+    "l'indirizzo del token deve essere http o https": "the token address must be http or https",
+    "manca clientId": "missing clientId",
+    "manca clientSecret": "missing clientSecret",
+    "il corpo deve essere un oggetto o un elenco": "the body must be an object or a list",
 }
 
 _MODELLI = (
@@ -529,6 +543,7 @@ _MODELLI = (
     (re.compile(r"^colonna ripetuta (.+)$"), "repeated column {a}"),
     (re.compile(r"^la scheda (.+) non è nel ruolo di Nesso$"), "The entity {a} is not in Nesso's role."),
     (re.compile(r"^manca (host|database|user|query|path)$"), "Missing {a}."),
+    (re.compile(r"^token OAuth HTTP (\d+)$"), "OAuth token HTTP {a}."),
 )
 
 

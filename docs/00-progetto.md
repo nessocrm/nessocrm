@@ -20,10 +20,10 @@ Un **collegamento** è il canale. Un'**integrazione** è la regola: quale colleg
 
 | Canale | Verso | Comportamento già in funzione |
 |---|---|---|
-| Webhook | entra in Espo | Indirizzo con token. Corpo oggetto, elenco, oppure `{records:[]}` |
+| Webhook | entra in Espo | Indirizzo con token. Corpo oggetto, elenco, oppure `{records:[]}`. Se c'è un segreto, il corpo deve portare la firma |
 | Database | entra in Espo | Una SELECT su MySQL o MariaDB, letta a pagine da 200 fino in fondo. Il motore non scrive su quel database |
 | File CSV | entra in Espo | Cartella `scambio/{id}`, UTF-8, virgola o punto e virgola. Dopo il giro il file va in `elaborati/`, anche se qualche riga è scartata. Se manca una colonna obbligatoria il file resta dov'è |
-| HTTP | esce da Espo | POST JSON verso un indirizzo, oppure verso la casella locale. Si può aggiungere Bearer, utente e password, o un'intestazione |
+| HTTP | esce da Espo | POST JSON verso un indirizzo, oppure verso la casella locale. Si può aggiungere Bearer, utente e password, un'intestazione, oppure OAuth a credenziali client |
 
 La scheda non è scritta nel codice. Nesso legge il metadata di Espo e propone le schede con tab e i campi scrivibili.
 
@@ -90,6 +90,10 @@ I test sono nella classe `IngressoRuoloAvviso` e nei giri `senza ingresso`, `il 
 In elenco, per ogni integrazione: il prossimo giro, l'ultimo successo, l'ultimo errore, e da quanto tace. Il silenzio si conta dall'ultimo successo. Un giro fallito non viene contato come attività. Senza data di modifica il cursore di uscita segue l'id già consegnato, e il giro dopo non rimanda gli stessi record.
 
 Il file in cartella può essere CSV o Excel. SFTP e FTPS leggono gli stessi file e, dopo il giro, li spostano in `elaborati/` sul server. In uscita depositano un CSV. La password non entra nello scarico. Il database resta una SELECT: MySQL e MariaDB come prima se non si sceglie altro, e in più Postgres, SQL Server e Oracle. TLS e un tunnel SSH si accendono sul collegamento; spenti, la connessione è quella di prima. I test sono nella classe `StatoECanali` e nei giri `xlsx`, `senza modified at` e `mysql senza tls`.
+
+### Firma e OAuth, 21 ottobre 2026
+
+Un webhook senza segreto di firma resta sull'indirizzo con il token. Se il segreto c'è, il corpo deve arrivare con l'intestazione `X-Nesso-Firma`: HMAC-SHA256 del corpo, in esadecimale, anche con il prefisso `sha256=`. Firma assente o diversa: HTTP 401, e non nasce un giro. L'uscita HTTP tiene nessuna autenticazione, Bearer, utente e password, e un'intestazione. In più OAuth a credenziali client: il token si chiede di nuovo quando è scaduto, poi il JSON esce come prima. Segreto, client secret e token non entrano nel giornale né nello scarico. I test sono nella classe `FirmaEOauth`.
 
 ### Accensione, 19 ottobre 2026
 
@@ -159,7 +163,6 @@ Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. 
 
 ### Canali
 
-- HTTP firmato in ingresso. OAuth in uscita.
 - Scrittura di ritorno sulla sorgente, spenta finché non si accende.
 - Il documento come canale, con cartella e visibilità. Il percorso di un file locale si può già caricare su un campo file.
 - La casella locale consegna il JSON a un'altra integrazione. Oggi lo accumula e si ferma.

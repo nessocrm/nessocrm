@@ -523,6 +523,12 @@
             <label>Cartella remota <input name="path" autocomplete="off" value="${esc(config.path || "")}"></label>
             <p class="hint">Si leggono i .csv e i .xlsx in quella cartella. Dopo il giro il file va in elaborati, sullo stesso server. In uscita Nesso deposita un CSV.</p>
           </div>
+          <div id="hook-fields" hidden>
+            <label>Segreto della firma, facoltativo
+              <input name="signSecret" type="password" autocomplete="new-password" placeholder="${config.hasSignSecret ? "Lascia vuoto per non cambiarlo" : ""}">
+              <span class="hint">Se lo indichi, il corpo deve arrivare con l'intestazione X-Nesso-Firma. Senza segreto resta il token nell'indirizzo.</span>
+            </label>
+          </div>
           <div id="http-fields" hidden>
             <label>Indirizzo di destinazione
               <input name="url" type="url" placeholder="https://" value="${esc(config.url || "")}">
@@ -530,10 +536,11 @@
             </label>
             <label>Autenticazione
               <select name="auth">
-                <option value="none" ${config.auth === "bearer" || config.auth === "basic" || config.auth === "header" ? "" : "selected"}>Nessuna</option>
+                <option value="none" ${!config.auth || config.auth === "none" ? "selected" : ""}>Nessuna</option>
                 <option value="bearer" ${config.auth === "bearer" ? "selected" : ""}>Bearer, un token</option>
                 <option value="basic" ${config.auth === "basic" ? "selected" : ""}>Utente e password</option>
                 <option value="header" ${config.auth === "header" ? "selected" : ""}>Un'intestazione con nome e valore</option>
+                <option value="oauth" ${config.auth === "oauth" ? "selected" : ""}>OAuth, credenziali client</option>
               </select>
             </label>
             <label>Token <input name="token" type="password" autocomplete="new-password" placeholder="${config.hasToken ? "Lascia vuoto per non cambiarlo" : ""}"></label>
@@ -541,6 +548,13 @@
             <label>Password della destinazione <input name="httpPassword" type="password" autocomplete="new-password" placeholder="${config.hasPassword ? "Lascia vuoto per non cambiarla" : ""}"></label>
             <label>Nome intestazione <input name="headerName" autocomplete="off" value="${esc(config.headerName || "")}"></label>
             <label>Valore intestazione <input name="headerValue" type="password" autocomplete="new-password" placeholder="${config.hasHeader ? "Lascia vuoto per non cambiarlo" : ""}"></label>
+            <div id="oauth-fields" hidden>
+              <label>Indirizzo del token <input name="tokenUrl" type="url" placeholder="https://" value="${esc(config.tokenUrl || "")}"></label>
+              <label>Client id <input name="clientId" autocomplete="off" value="${esc(config.clientId || "")}"></label>
+              <label>Client secret <input name="clientSecret" type="password" autocomplete="new-password" placeholder="${config.hasClientSecret ? "Lascia vuoto per non cambiarlo" : ""}"></label>
+              <label>Scope, facoltativo <input name="scope" autocomplete="off" value="${esc(config.scope || "")}"></label>
+              <p class="hint">Il token si chiede di nuovo quando è scaduto. Poi il JSON esce come prima, con Authorization Bearer.</p>
+            </div>
           </div>
           <div id="pdf-fields" hidden>
             <label>Cartella documenti, facoltativa <input name="documentFolder" autocomplete="off" value="${esc(config.documentFolder || "")}"></label>
@@ -558,9 +572,12 @@
       const show = () => {
         const chosen = form.kind.value;
         document.querySelector("#db-fields").hidden = chosen !== "database";
+        document.querySelector("#hook-fields").hidden = chosen !== "webhook";
         document.querySelector("#http-fields").hidden = chosen !== "http";
         document.querySelector("#pdf-fields").hidden = chosen !== "pdf";
         document.querySelector("#file-fields").hidden = chosen !== "sftp" && chosen !== "ftps";
+        const oauth = document.querySelector("#oauth-fields");
+        if (oauth) oauth.hidden = chosen !== "http" || !form.auth || form.auth.value !== "oauth";
       };
       form.addEventListener("change", show);
       if (form.engine) form.engine.addEventListener("change", () => {
@@ -599,6 +616,9 @@
             path: form.path.value.trim()
           };
         }
+        if (body.kind === "webhook") {
+          body.config = { signSecret: form.signSecret.value };
+        }
         if (body.kind === "http") {
           body.config = {
             url: form.url.value.trim(),
@@ -607,7 +627,11 @@
             user: form.httpUser.value.trim(),
             password: form.httpPassword.value,
             headerName: form.headerName.value.trim(),
-            headerValue: form.headerValue.value
+            headerValue: form.headerValue.value,
+            tokenUrl: form.tokenUrl.value.trim(),
+            clientId: form.clientId.value.trim(),
+            clientSecret: form.clientSecret.value,
+            scope: form.scope.value.trim()
           };
         }
         if (body.kind === "pdf") {

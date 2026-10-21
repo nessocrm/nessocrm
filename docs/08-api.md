@@ -61,7 +61,7 @@ Lo usa la pagina a ogni refresh. Contiene:
 | `morning` | percentuale delle anagrafiche, tono e frase. `percent` è nullo se oggi non c'è un giro riuscito |
 | `alerts` | frasi della quadratura rossa e del file atteso non elaborato |
 
-Su ogni integrazione in ingresso da CSV, `balance` è la quadratura e `file_alert` è 1 se il file atteso non è ancora stato elaborato oggi. `expectAt` si salva con l'integrazione, accanto a `scheduleAt`. Ogni integrazione ha `pace`: prossimo giro, ultimo successo con da quanto tace, ultimo errore. Il kind di un collegamento può essere anche `sftp` o `ftps`; il database accetta `engine` (`mysql`, `postgres`, `mssql`, `oracle`), `tls` e i campi del tunnel. La password non è nel JSON.
+Su ogni integrazione in ingresso da CSV, `balance` è la quadratura e `file_alert` è 1 se il file atteso non è ancora stato elaborato oggi. `expectAt` si salva con l'integrazione, accanto a `scheduleAt`. Ogni integrazione ha `pace`: prossimo giro, ultimo successo con da quanto tace, ultimo errore. Il kind di un collegamento può essere anche `sftp` o `ftps`; il database accetta `engine` (`mysql`, `postgres`, `mssql`, `oracle`), `tls` e i campi del tunnel. La password non è nel JSON. Un webhook può avere `signSecret`; in lettura diventa vuoto, con `hasSignSecret`. L'uscita HTTP accetta anche `auth: oauth`, con `tokenUrl`, `clientId` e `scope`: client secret e token di accesso non sono nel JSON.
 
 ## POST /api/connections
 
@@ -311,6 +311,8 @@ Lo scarico è l'elenco dei collegamenti, senza password, token e valori di intes
 Cancella coda, sink, cursore, scarti e giornale dei giri di quell'id. Non cancella i record su Espo e non cancella `delivery`.
 
 ## POST /hook/{id}/{token}
+
+Senza `signSecret` sul collegamento basta il token nell'indirizzo. Con il segreto, l'intestazione `X-Nesso-Firma` deve essere l'HMAC-SHA256 del corpo grezzo. Se manca o non torna, la risposta è 401 e non nasce un giro.
 
 Corpo, un record:
 

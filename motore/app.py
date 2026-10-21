@@ -2324,6 +2324,15 @@ def public_connection(row: sqlite3.Row) -> dict:
     if config.get("headerValue"):
         config["hasHeader"] = True
         config["headerValue"] = ""
+    for secret, flag in (
+        ("signSecret", "hasSignSecret"),
+        ("clientSecret", "hasClientSecret"),
+        ("accessToken", "hasAccessToken"),
+        ("refreshToken", "hasRefreshToken"),
+    ):
+        if config.get(secret):
+            config[flag] = True
+            config[secret] = ""
     item = {"id": row["id"], "name": row["name"], "kind": row["kind"], "config": config}
     if row["kind"] == "webhook":
         item["url"] = f"{PUBLIC_BASE}/hook/{row['id']}/{row['token']}"
@@ -2527,11 +2536,14 @@ def save_connection(body: dict) -> dict:
         if url and not url.startswith(("http://", "https://")):
             raise RuntimeError("l'indirizzo di destinazione deve essere http o https")
         auth = str(config.get("auth") or "none")
-        if auth not in ("none", "bearer", "basic", "header"):
+        if auth not in ("none", "bearer", "basic", "header", "oauth"):
             raise RuntimeError("autenticazione della destinazione non riconosciuta")
         header_name = str(config.get("headerName") or "").strip()
         if auth == "header" and not re.match(r"^[A-Za-z0-9-]{1,40}$", header_name):
             raise RuntimeError("nome intestazione non valido")
+        token_url = str(config.get("tokenUrl") or "").strip()
+        if auth == "oauth" and token_url and not token_url.startswith(("http://", "https://")):
+            raise RuntimeError("l'indirizzo del token deve essere http o https")
         config = {
             "url": url,
             "auth": auth,
@@ -2540,7 +2552,17 @@ def save_connection(body: dict) -> dict:
             "password": str(config.get("password") or ""),
             "headerName": header_name,
             "headerValue": str(config.get("headerValue") or ""),
+            "tokenUrl": token_url,
+            "clientId": str(config.get("clientId") or "").strip(),
+            "clientSecret": str(config.get("clientSecret") or ""),
+            "scope": str(config.get("scope") or "").strip(),
+            "accessToken": str(config.get("accessToken") or ""),
+            "refreshToken": str(config.get("refreshToken") or ""),
+            "tokenObtained": str(config.get("tokenObtained") or ""),
+            "expiresIn": int(config.get("expiresIn") or 0),
         }
+    if kind == "webhook":
+        config = {"signSecret": str(config.get("signSecret") or "").strip()}
     if kind == "csv":
         config = {}
     if kind == "pdf":
@@ -2548,8 +2570,6 @@ def save_connection(body: dict) -> dict:
             "documentFolder": str(config.get("documentFolder") or "").strip(),
             "team": str(config.get("team") or "").strip(),
         }
-    if kind == "webhook":
-        config = {}
     with connect() as conn:
         connection_id = str(body.get("id") or "").strip()
         if connection_id:
@@ -2571,6 +2591,13 @@ def save_connection(body: dict) -> dict:
                     config["password"] = previous["password"]
                 if not config.get("headerValue") and previous.get("headerValue"):
                     config["headerValue"] = previous["headerValue"]
+                if not config.get("clientSecret") and previous.get("clientSecret"):
+                    config["clientSecret"] = previous["clientSecret"]
+                for kept in ("accessToken", "refreshToken", "tokenObtained", "expiresIn"):
+                    if previous.get(kept) and not config.get(kept):
+                        config[kept] = previous[kept]
+            if kind == "webhook" and not config.get("signSecret") and previous.get("signSecret"):
+                config["signSecret"] = previous["signSecret"]
         else:
             connection_id = slugify(name)
             suffix = 2
@@ -2579,6 +2606,13 @@ def save_connection(body: dict) -> dict:
                 connection_id = f"{base}-{suffix}"
                 suffix += 1
             token = secrets.token_urlsafe(24)
+        if kind == "http" and config.get("auth") == "oauth":
+            if not str(config.get("tokenUrl") or "").startswith(("http://", "https://")):
+                raise RuntimeError("l'indirizzo del token deve essere http o https")
+            if not config.get("clientId"):
+                raise RuntimeError("manca clientId")
+            if not config.get("clientSecret"):
+                raise RuntimeError("manca clientSecret")
         if kind == "database":
             columns = read_database(config, sample=1)
             config["columns"] = list(columns[0].keys()) if columns else []
@@ -2899,6 +2933,78 @@ def destination_headers(config: dict) -> dict:
     return headers
 
 
+def request_oauth(config: dict, grant: str) -> dict:
+    fields = {
+        "grant_type": grant,
+        "client_id": str(config.get("clientId") or ""),
+        "client_secret": str(config.get("clientSecret") or ""),
+    }
+    if grant == "refresh_token":
+        fields["refresh_token"] = str(config.get("refreshToken") or "")
+    elif config.get("scope"):
+        fields["scope"] = str(config["scope"])
+    data = urllib.parse.urlencode(fields).encode()
+    request = urllib.request.Request(str(config.get("tokenUrl") or ""), data=data, method="POST")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"token OAuth HTTP {error.code}") from error
+    if not isinstance(payload, dict):
+        raise RuntimeError("OAuth non ha restituito un token")
+    return payload
+
+
+def store_oauth(connection_id: str, updates: dict) -> None:
+    with connect() as conn:
+        row = conn.execute("SELECT config_json FROM connection WHERE id = ?", (connection_id,)).fetchone()
+        if row is None:
+            return
+        current = json.loads(row["config_json"])
+        current.update(updates)
+        conn.execute(
+            "UPDATE connection SET config_json = ? WHERE id = ?",
+            (json.dumps(current, ensure_ascii=False), connection_id),
+        )
+
+
+def fresh_oauth_token(connection_id: str, config: dict, now: datetime | None = None, fetch=None) -> str:
+    moment = now or datetime.now()
+    caller = fetch or request_oauth
+    if config.get("accessToken") and not carico.oauth_expired(
+        config.get("tokenObtained"), int(config.get("expiresIn") or 0), moment
+    ):
+        return str(config["accessToken"])
+    grant = "refresh_token" if config.get("refreshToken") else "client_credentials"
+    try:
+        payload = caller(config, grant)
+    except Exception:
+        if grant != "refresh_token":
+            raise
+        payload = caller(config, "client_credentials")
+    token = str((payload or {}).get("access_token") or "")
+    if not token:
+        raise RuntimeError("OAuth non ha restituito un token")
+    expires = int((payload or {}).get("expires_in") or 3600)
+    updates = {
+        "accessToken": token,
+        "tokenObtained": moment.strftime("%Y-%m-%d %H:%M:%S"),
+        "expiresIn": expires,
+    }
+    if (payload or {}).get("refresh_token"):
+        updates["refreshToken"] = str(payload["refresh_token"])
+    store_oauth(connection_id, updates)
+    config.update(updates)
+    return token
+
+
+def outbound_headers(connection_id: str, config: dict) -> dict:
+    if (config.get("auth") or "none") != "oauth":
+        return destination_headers(config)
+    return {"Authorization": "Bearer " + fresh_oauth_token(connection_id, config)}
+
+
 def post_json(url: str, payload: dict, headers: dict | None = None) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode()
     request = urllib.request.Request(url, data=data, method="POST")
@@ -2913,7 +3019,13 @@ def post_json(url: str, payload: dict, headers: dict | None = None) -> None:
         raise RuntimeError(f"destinazione HTTP {error.code}") from error
 
 
-def accept_hook(connection_id: str, token: str, body: dict | list) -> dict:
+def accept_hook(
+    connection_id: str,
+    token: str,
+    body: dict | list,
+    raw: bytes | None = None,
+    signature: str | None = None,
+) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT * FROM connection WHERE id = ?", (connection_id,)).fetchone()
         pipelines = [
@@ -2932,6 +3044,9 @@ def accept_hook(connection_id: str, token: str, body: dict | list) -> dict:
         ).fetchone()
     if row is None or row["kind"] != "webhook" or not hmac.compare_digest(row["token"], token):
         raise PermissionError("collegamento non valido")
+    secret = str(json.loads(row["config_json"] or "{}").get("signSecret") or "")
+    if secret and not carico.signature_matches(secret, raw if raw is not None else b"", signature or ""):
+        raise PermissionError("firma non valida")
     if isinstance(body, dict) and isinstance(body.get("records"), list):
         records = body["records"]
     elif isinstance(body, list):
@@ -3643,9 +3758,10 @@ def execute_pipeline(pipeline_id: str) -> dict:
         sent = 0
         failed = ""
         last = None
+        headers = outbound_headers(link["id"], config) if records else {}
         for item in records:
             try:
-                post_json(url, item["payload"], destination_headers(config))
+                post_json(url, item["payload"], headers)
             except Exception as error:
                 failed = str(error)
                 remember_delivery(pipeline_id, link["id"], item["payload"], "errore", failed)
@@ -4795,7 +4911,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, set_enabled(parts[2], body.get("enabled") not in (False, 0, "0")))
                 return
             if len(parts) == 3 and parts[0] == "hook":
-                self.send_json(200, accept_hook(parts[1], parts[2], self.read_json()))
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    body = json.loads(raw.decode()) if raw else {}
+                except json.JSONDecodeError:
+                    self.send_fail(400, "il corpo deve essere un oggetto o un elenco")
+                    return
+                self.send_json(200, accept_hook(parts[1], parts[2], body, raw, self.headers.get("X-Nesso-Firma") or ""))
                 return
             if len(parts) == 3 and parts[0] == "inbox":
                 self.send_json(200, accept_inbox(parts[1], parts[2], self.read_json()))

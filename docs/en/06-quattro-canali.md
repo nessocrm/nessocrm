@@ -8,13 +8,13 @@ The direction allowed on the integration: `http` only `out`, `sftp` and `ftps` e
 
 Meant for a system that calls as soon as a datum is born: a form, an ERP with an event.
 
-At creation the engine asks for no parameters. It builds:
+The signing secret is optional. Without it, only the token in the address remains. It builds:
 
 ```
 {PUBLIC_BASE_URL}/hook/{id}/{token}
 ```
 
-With the compose values, the base is `http://localhost:8091`. The address appears on the connection card. Whoever has it can insert data. There is no second factor.
+With the compose values, the base is `http://localhost:8091`. The address appears on the connection card. Whoever has it can insert data. The signature, when the secret is set, is the extra check.
 
 `POST` accepts:
 
@@ -26,6 +26,8 @@ With the compose values, the base is `http://localhost:8091`. The address appear
 | anything else | HTTP 400 "the body must be an object or a list" |
 
 The token is compared in constant time (`hmac.compare_digest`). Missing connection, different kind, different token: HTTP 401 "connection not valid".
+
+If `signSecret` is set, the raw body must arrive with the `X-Nesso-Firma` header: HMAC-SHA256 in hexadecimal, also with the `sha256=` prefix. A missing or different signature: HTTP 401 "invalid signature", and no run starts. Without a secret the webhook from before keeps coming in. The secret does not appear in the download.
 
 If no inbound integration points at this id: HTTP 400 "no integration uses this connection". The body is not kept.
 
@@ -125,6 +127,8 @@ The only parameter is `url`. Empty is allowed. If it is set it must start with `
 Empty URL: the run sends to the engine inbox, described in the outbound chapter. The card shows the public `inboxUrl` (`localhost`), while the internal send uses `127.0.0.1` and the process port. They are the same server. In the detail of the last run the internal address is visible.
 
 A set URL: one POST per record, and the inbox of this connection receives nothing, unless the URL is exactly that of the inbox.
+
+Authentication is none, Bearer, user and password, or a header. With OAuth the engine asks for the token at the given address, with the client credentials, and renews it when it has expired. Then the JSON goes out as before, with `Authorization: Bearer`. The client secret and the token do not enter the journal or the download. Without OAuth the send stays the one from before.
 
 "Run now" with zero new records answers `sent: 0` and status `ok`. It is not an error.
 

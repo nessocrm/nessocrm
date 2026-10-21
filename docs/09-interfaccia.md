@@ -43,4 +43,4 @@ Sulla scheda Espo compare Origine Nesso: «aggiornato dal gestionale» con data 
 
 Sull'integrazione: anteprima del giro, modalità lettura, annullamento, conferma delle chiusure. In fondo alla pagina ci sono il piano di accensione e la finestra di silenzio. Il piano elenca fino a tre integrazioni già salvate: si conferma un gradino solo dopo la sua anteprima, e il successivo resta spento finché non lo si riattiva. La finestra ha due date e un motivo, per una integrazione o per tutte. Se un file è arrivato in quei giorni, la scheda dice che è in attesa e offre conferma o scarto. In Attività il riepilogo del giro, la coda da guardare e il giornale, compresa l'assenza del file.
 
-Sulla destinazione HTTP il modulo chiede l'autenticazione: nessuna, Bearer, utente e password, oppure un'intestazione.
+Sulla destinazione HTTP il modulo chiede l'autenticazione: nessuna, Bearer, utente e password, un'intestazione, oppure OAuth a credenziali client. Sul webhook il segreto della firma è facoltativo: vuoto, resta il token nell'indirizzo.

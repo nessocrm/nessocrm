@@ -61,7 +61,7 @@ The page uses it on every refresh. It contains:
 | `morning` | accounts percent, tone and sentence. `percent` is null if there is no successful run today |
 | `alerts` | sentences of a red balance and of an expected file not processed |
 
-On every inbound integration from CSV, `balance` is the balance and `file_alert` is 1 if the expected file has not yet been processed today. `expectAt` is saved with the integration, next to `scheduleAt`. Every integration has `pace`: next run, last success with how long it has been quiet, last error. A connection kind can also be `sftp` or `ftps`; the database accepts `engine` (`mysql`, `postgres`, `mssql`, `oracle`), `tls` and the tunnel fields. The password is not in the JSON.
+On every inbound integration from CSV, `balance` is the balance and `file_alert` is 1 if the expected file has not yet been processed today. `expectAt` is saved with the integration, next to `scheduleAt`. Every integration has `pace`: next run, last success with how long it has been quiet, last error. A connection kind can also be `sftp` or `ftps`; the database accepts `engine` (`mysql`, `postgres`, `mssql`, `oracle`), `tls` and the tunnel fields. The password is not in the JSON. A webhook can have `signSecret`; on read it becomes empty, with `hasSignSecret`. Outbound HTTP also accepts `auth: oauth`, with `tokenUrl`, `clientId` and `scope`: the client secret and the access token are not in the JSON.
 
 ## POST /api/connections
 
@@ -311,6 +311,8 @@ The download is the list of connections, without passwords, tokens and header va
 Deletes queue, sink, cursor, rejects and the run journal of that id. It does not delete the records in Espo and it does not delete `delivery`.
 
 ## POST /hook/{id}/{token}
+
+Without `signSecret` on the connection the token in the address is enough. With the secret, the `X-Nesso-Firma` header must be the HMAC-SHA256 of the raw body. If it is missing or does not match, the answer is 401 and no run starts.
 
 Body, one record:
 
