@@ -1022,5 +1022,254 @@ class FirmaEOauth(unittest.TestCase):
         self.assertNotIn("nuovo", detail)
 
 
+class Evolutive(unittest.TestCase):
+    def setUp(self):
+        app.DB_PATH = Path(os.environ["DB_PATH"])
+        app.SCAMBIO = Path(os.environ["SCAMBIO_DIR"])
+        app.init_db()
+        with app.connect() as conn:
+            for table in ("pipeline", "connection", "queue_item", "scarto", "delivery", "run_log", "cursor_state", "sink_item", "chiave", "mapping_version", "mail_queue", "sheet_field"):
+                conn.execute(f"DELETE FROM {table}")
+        self.saved = (app.espo_request, app.espo_page, app.post_json, app.read_database, app.write_source, app.send_smtp)
+
+    def tearDown(self):
+        app.espo_request, app.espo_page, app.post_json, app.read_database, app.write_source, app.send_smtp = self.saved
+
+    def _account(self, pipeline_id, mapping, **extra):
+        with app.connect() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, enabled)
+                VALUES (?, ?, 'in', 'Account', 'codice', ?, ?, 'cExternalKey', 1)
+                """,
+                (pipeline_id, pipeline_id, pipeline_id + ":{codice}", mapping),
+            )
+            for key, value in extra.items():
+                conn.execute(f"UPDATE pipeline SET {key} = ? WHERE id = ?", (value, pipeline_id))
+
+    def test_obbligatorio_e_errore_col_nome_del_campo(self):
+        calls = []
+
+        def fake(method, path, body=None, query=None):
+            calls.append(method)
+            if "Note" in str(path):
+                return 200, {"id": "nota"}
+            return 400, {"field": "name", "message": "non ammesso"}
+
+        app.espo_request = fake
+        self._account("obbligatori", '[{"from":"nome","to":"name","transform":"copy","required":true}]')
+        empty = app.ingest_row("obbligatori", {"codice": "1", "nome": ""})
+        self.assertEqual(empty["status"], "scartato")
+        self.assertIn("name", empty["detail"])
+        self.assertEqual(calls, [])
+        app.espo_request = lambda method, path, body=None, query=None: (400, "")
+        named = app.ingest_row("obbligatori", {"codice": "1", "nome": "Nord"})
+        self.assertIn("risposta vuota", named["detail"])
+
+    def test_il_webhook_incollato_non_scrive(self):
+        calls = []
+        app.espo_request = lambda *args, **kwargs: calls.append(args) or (200, {"list": []})
+        with app.connect() as conn:
+            conn.execute("INSERT INTO connection (id, name, kind, config_json, token) VALUES ('gancio2', 'Gancio', 'webhook', '{}', 'tok')")
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id)
+                VALUES ('gancio2', 'Gancio', 'in', 'Account', 'codice', 'gancio2:{codice}', ?, 'cExternalKey', 'gancio2')
+                """,
+                ('[{"from":"codice","to":"name","transform":"copy"}]',),
+            )
+        plain = app.dry_run("gancio2")
+        self.assertIn("non ha righe", plain["detail"])
+        shown = app.dry_run("gancio2", {"codice": "1"})
+        self.assertEqual(shown["rows"][0]["mapped"]["name"], "1")
+        self.assertTrue(all(call[0] != "POST" for call in calls))
+        broken = app.dry_run("gancio2", "no")
+        self.assertIn("oggetto", broken["detail"])
+
+    def test_una_riga_scartata_si_rilancia_da_sola(self):
+        calls = []
+
+        def fake(method, path, body=None, query=None):
+            calls.append(str(path))
+            if method == "GET":
+                return 200, {"list": []}
+            return 201, {"id": "esp-1"}
+
+        app.espo_request = fake
+        self._account("solo", '[{"from":"nome","to":"name","transform":"copy"}]')
+        with app.connect() as conn:
+            conn.execute(
+                "INSERT INTO scarto (pipeline_id, external_id, payload_json, detail, created_at) VALUES ('solo', '1', ?, 'vecchio', '2026-10-21 10:00:00')",
+                ('{"codice":"1","nome":"Nord"}',),
+            )
+            scarto_id = conn.execute("SELECT id FROM scarto").fetchone()["id"]
+        result = app.replay_reject(scarto_id)
+        self.assertEqual(result["status"], "creato")
+        with app.connect() as conn:
+            row = conn.execute("SELECT resolved, detail FROM scarto WHERE id = ?", (scarto_id,)).fetchone()
+        self.assertEqual(row["resolved"], 1)
+        self.assertTrue(any(path.endswith("/Note") for path in calls))
+
+    def test_due_padri_e_la_chiave_esterna_in_uscita(self):
+        with app.connect() as conn:
+            conn.execute("INSERT INTO pipeline (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, enabled, last_status) VALUES ('aziende', 'Aziende', 'in', 'Account', 'codice', 'aziende:{codice}', '[]', 'cExternalKey', 1, 'errore')")
+            conn.execute("INSERT INTO pipeline (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, enabled, last_status) VALUES ('sedi', 'Sedi', 'in', 'Account', 'codice', 'sedi:{codice}', '[]', 'cExternalKey', 1, 'ok')")
+            conn.execute("INSERT INTO pipeline (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, enabled, depends_json) VALUES ('contatti', 'Contatti', 'in', 'Contact', 'codice', 'contatti:{codice}', '[]', 'cExternalKey', 1, ?)", ('["aziende","sedi"]',))
+        result = app.execute_chain("contatti", set(), False)
+        self.assertEqual(result["missing"], ["Aziende"])
+        calls = []
+        app.espo_page = lambda *args, **kwargs: [{"id": "acc-1", "accountId": "acc-1", "modifiedAt": "2026-10-21 09:00:00"}] if calls.append(1) or len(calls) <= 2 else []
+        app.post_json = lambda *args, **kwargs: calls.append(args)
+        with app.connect() as conn:
+            conn.execute("INSERT INTO chiave (entity, external_key, espo_id) VALUES ('Account', 'anagrafiche:C001', 'acc-1')")
+            conn.execute(
+                "INSERT INTO connection (id, name, kind, config_json, token) VALUES ('uscita', 'Uscita', 'http', ?, 'tok')",
+                ('{"url":"https://example.test/in","auth":"none"}',),
+            )
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id)
+                VALUES ('offerte', 'Offerte', 'out', 'Opportunity', 'id', '', ?, 'cExternalKey', 'uscita')
+                """,
+                ('[{"from":"accountId","to":"cliente","transform":"copy","as":"chiave","lookupEntity":"Account"}]',),
+            )
+        sent = app.execute_pipeline("offerte")
+        self.assertEqual(sent["sent"], 1)
+        self.assertEqual(calls[-1][1]["cliente"], "anagrafiche:C001")
+
+    def test_casella_documento_e_ritorno_spento(self):
+        calls = []
+
+        def fake(method, path, body=None, query=None):
+            calls.append((method, path, body))
+            if str(path).endswith("Attachment"):
+                return 201, {"id": "att"}
+            if str(path).endswith("Document"):
+                return 201, {"id": "doc"}
+            if method == "GET":
+                return 200, {"list": []}
+            return 201, {"id": "esp-2"}
+
+        app.espo_request = fake
+        self._account("dentro", '[{"from":"nome","to":"name","transform":"copy"}]')
+        with app.connect() as conn:
+            conn.execute("INSERT INTO connection (id, name, kind, config_json, token) VALUES ('casella', 'Casella', 'http', ?, 'tok')", ('{"deliverTo":"dentro"}',))
+            conn.execute("UPDATE pipeline SET enabled = 0 WHERE id = 'dentro'")
+        held = app.accept_inbox("casella", "tok", {"codice": "1", "nome": "Nord"})
+        self.assertFalse(held["delivered"])
+        with app.connect() as conn:
+            conn.execute("UPDATE pipeline SET enabled = 1 WHERE id = 'dentro'")
+        once = app.accept_inbox("casella", "tok", {"codice": "9", "nome": "Sud"})
+        self.assertTrue(once["delivered"])
+        again = app.deliver_inbox("casella", {"codice": "9", "nome": "Sud"})
+        self.assertFalse(again)
+        folder = Path(os.environ["SCAMBIO_DIR"]) / "atti"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "contratto.txt").write_text("ciao", encoding="utf-8")
+        with app.connect() as conn:
+            conn.execute("INSERT INTO connection (id, name, kind, config_json, token) VALUES ('atti', 'Atti', 'documento', ?, 'tok')", ('{"documentFolder":"Contratti","team":"Vendite"}',))
+            conn.execute("INSERT INTO pipeline (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id) VALUES ('atti', 'Atti', 'in', 'Document', 'nome', 'atti:{nome}', '[]', 'cExternalKey', 'atti')")
+        done = app.execute_pipeline("atti")
+        self.assertEqual(done["taken"], 1)
+        self.assertTrue((folder / "elaborati").is_dir())
+        self.assertFalse((folder / "contratto.txt").exists())
+        writes = []
+        app.read_database = lambda *args, **kwargs: [{"codice": "1"}]
+        app.write_source = lambda *args, **kwargs: writes.append(args) or 0
+        with app.connect() as conn:
+            conn.execute("INSERT INTO connection (id, name, kind, config_json, token) VALUES ('db1', 'Db', 'database', ?, 'tok')", ('{"host":"db","database":"gestionale","user":"espocrm","query":"SELECT codice FROM clienti","engine":"mysql"}',))
+            conn.execute("INSERT INTO pipeline (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id, write_back) VALUES ('lettura', 'Lettura', 'in', 'Account', 'codice', 'lettura:{codice}', ?, 'cExternalKey', 'db1', 0)", ('[{"from":"codice","to":"name","transform":"copy"}]',))
+        app.execute_pipeline("lettura")
+        self.assertEqual(writes, [])
+        with app.connect() as conn:
+            conn.execute("UPDATE pipeline SET write_back = 1, write_fields = ? WHERE id = 'lettura'", ('["note"]',))
+        app.execute_pipeline("lettura")
+        self.assertEqual(len(writes), 1)
+
+    def test_posta_passaggio_e_versione(self):
+        app.set_setting("smtp_host", "")
+        app.deliver_notice({"pipelineId": "x", "kind": "fallito", "name": "Clienti"})
+        with app.connect() as conn:
+            queued = conn.execute("SELECT COUNT(*) AS n FROM mail_queue").fetchone()["n"]
+        self.assertEqual(queued, 0)
+        app.set_setting("smtp_host", "smtp.test")
+        sent = []
+
+        def sender(subject, body):
+            sent.append(subject)
+            if len(sent) == 1:
+                raise RuntimeError("rifiutato")
+
+        app.send_smtp = sender
+        app.queue_mail("prova", "Nesso: prova", "ciao")
+        with app.connect() as conn:
+            row = conn.execute("SELECT status, attempts, last_error FROM mail_queue").fetchone()
+            conn.execute("UPDATE mail_queue SET next_at = '2000-01-01 00:00:00'")
+        self.assertEqual(row["status"], "attesa")
+        self.assertNotIn("password", row["last_error"] or "")
+        app.retry_mail()
+        self.assertEqual(sent, ["Nesso: prova", "Nesso: prova"])
+        with app.connect() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, name, kind, config_json, token) VALUES ('segreto', 'Segreto', 'database', ?, 'tok')",
+                ('{"host":"db","password":"locale-db","query":"SELECT 1"}',),
+            )
+        exported = app.passaggio_config()
+        self.assertTrue(exported["passaggio"])
+        self.assertNotIn("locale-db", json.dumps(exported))
+        before = app.connect().execute("SELECT COUNT(*) AS n FROM connection").fetchone()["n"]
+        loaded = app.import_config(exported)
+        self.assertEqual(loaded["salvate"], 0)
+        after = app.connect().execute("SELECT COUNT(*) AS n FROM connection").fetchone()["n"]
+        self.assertEqual(before, after)
+        self._account("storia", '[{"from":"nome","to":"name","transform":"copy"}]')
+        app.remember_version("storia", [{"from": "nome", "to": "name"}], "chiara")
+        app.remember_version("storia", [{"from": "citta", "to": "billingAddressCity"}], "chiara")
+        versions = app.mapping_versions("storia")
+        self.assertEqual(len(versions), 2)
+        captured = []
+        original = app.save_pipeline
+        app.save_pipeline = lambda body: captured.append(body["mapping"]) or {"id": "storia"}
+        try:
+            app.restore_version("storia", versions[-1]["id"], "chiara")
+        finally:
+            app.save_pipeline = original
+        self.assertEqual(captured[0][0]["from"], "nome")
+        with self.assertRaises(RuntimeError):
+            app.rename_field("Account", "cCodice", "Codice gestionale")
+        with app.connect() as conn:
+            conn.execute("INSERT INTO sheet_field (entity, name, label) VALUES ('Account', 'cCodice', 'Codice cliente')")
+        app.espo_request = lambda method, path, body=None, query=None: (200, {"label": body.get("label"), "name": "cCodice"})
+        renamed = app.rename_field("Account", "cCodice", "Codice gestionale")
+        self.assertEqual(renamed["name"], "cCodice")
+        self.assertEqual(renamed["label"], "Codice gestionale")
+        app.espo_request = lambda method, path, body=None, query=None: (201, {"id": "mail-1"}) if method != "GET" else (200, {"list": []})
+        self.assertEqual(app.take_mail([{"id": "m1", "codice": "1", "nome": "Nord"}], "storia"), 1)
+
+    def test_l_attivita_nasce_solo_alla_creazione(self):
+        posts = []
+
+        def fake(method, path, body=None, query=None):
+            if method in ("POST", "PUT"):
+                posts.append(path)
+                return 200 if method == "PUT" else 201, {"id": "esp-att"}
+            return 200, {"list": []}
+
+        app.espo_request = fake
+        self._account(
+            "nuovo",
+            '[{"from":"nome","to":"name","transform":"copy"}]',
+            activity_json='{"type":"Task","date":"2026-10-22","assignee":"user-1"}',
+        )
+        first = app.ingest("nuovo", {"codice": "1", "nome": "Nord"})
+        second = app.ingest("nuovo", {"codice": "1", "nome": "Nord due"})
+        self.assertEqual(first["status"], "creato")
+        self.assertEqual(second["status"], "aggiornato")
+        self.assertEqual(sum(1 for path in posts if str(path).endswith("/Task")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

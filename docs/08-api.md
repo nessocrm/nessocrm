@@ -208,7 +208,7 @@ Corpo facoltativo `{"withDependencies": true}`. Se è vero, prima parte l'integr
 
 ## POST /api/pipelines/{id}/dry
 
-Legge al massimo cinque righe e restituisce `rows`, ognuna con `mapped` oppure `status: scartato`. Non scrive su Espo. Un lookup mancante con politica «crea» compare come `nuovo:valore` e il record non nasce. Il webhook risponde che non ha righe da leggere.
+Legge al massimo cinque righe e restituisce `rows`, ognuna con `mapped` oppure `status: scartato`. Non scrive su Espo. Un lookup mancante con politica «crea» compare come `nuovo:valore` e il record non nasce. Il webhook, senza esempio, risponde che non ha righe da leggere. Con `sample` interpreta il corpo e non scrive.
 
 ## POST /api/pipelines/{id}/anteprima
 
@@ -313,6 +313,8 @@ Cancella coda, sink, cursore, scarti e giornale dei giri di quell'id. Non cancel
 ## POST /hook/{id}/{token}
 
 Senza `signSecret` sul collegamento basta il token nell'indirizzo. Con il segreto, l'intestazione `X-Nesso-Firma` deve essere l'HMAC-SHA256 del corpo grezzo. Se manca o non torna, la risposta è 401 e non nasce un giro.
+
+`POST /api/pipelines/{id}/dry` senza corpo resta la prova di prima. Con `sample` interpreta il webhook e non scrive. `POST /api/scarti/{id}/ripeti` rilancia quella riga. `POST /api/passaggio` scarica la configurazione senza segreti e senza indirizzi; ricaricarla si ferma e non salva. `POST /api/posta/prova` accoda una prova solo se l'SMTP è indicato.
 
 Corpo, un record:
 

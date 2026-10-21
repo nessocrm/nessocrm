@@ -11,7 +11,7 @@ The menu is a bar on the left, 232 pixels wide, the same shape as the Espo side 
 | `#/schede/nuova` | Creates an entity. Singular and plural are entered |
 | `#/schede/{nome}` | Fields of the entity and a form to add one: label, type, values if it is a list, required |
 | `#/collegamenti` | List of channels, one card per connection |
-| `#/collegamenti/nuovo` | Form of a single connection. The type is chosen with radio buttons and only the fields of that type appear. PDF on the customer asks for a document folder and a team, both optional |
+| `#/collegamenti/nuovo` | Form of a single connection. The type is chosen with radio buttons and only the fields of that type appear. PDF on the customer and the document ask for a document folder and a team, both optional. On outbound HTTP there is the optional delivery of the inbox to another integration |
 | `#/collegamenti/modifica/{id}` | The same form, already filled. An empty password does not clear the saved one |
 | `#/integrazioni` | List of integrations, with entity, connection, cadence and result. From here you run, dry-run, edit, pause, download and upload the configuration, and download and upload the mapping sheet |
 | `#/consegna` | Page to print: addresses, integrations that are on, schedule, owner of each field, how to stop writes. There are no passwords and no tokens |
@@ -43,4 +43,4 @@ On the Espo record, Nesso origin appears: "updated from the ERP" with date and t
 
 On the integration: preview of the run, read mode, undo, confirmation of closes. At the bottom of the page are the switch-on plan and the quiet window. The plan lists up to three integrations already saved: a step is confirmed only after its preview, and the next one stays off until you resume it. The window has two dates and a reason, for one integration or for all. If a file arrived on those days, the card says it is waiting and offers confirm or discard. In Activity, the run summary, the review queue and the journal, including a missing file.
 
-On the HTTP destination the form asks for authentication: none, Bearer, user and password, a header, or OAuth client credentials. On the webhook the signing secret is optional: empty, the token in the address stays.
+On the HTTP destination the form asks for authentication: none, Bearer, user and password, a header, or OAuth client credentials. On the webhook the signing secret is optional: empty, the token in the address stays. The dry run of a webhook has a box for pasting an example. In Activity a rejected row has "Retry". On the entity, the label of a field created by Nesso can be changed and the technical name stays.

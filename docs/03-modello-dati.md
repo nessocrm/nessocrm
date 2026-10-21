@@ -21,7 +21,11 @@ Una riga è un'integrazione.
 | `last_run` | nullo | `YYYY-MM-DD HH:MM:SS` locale del contenitore |
 | `last_status` | nullo | `ok` o `errore` |
 | `last_detail` | nullo | Testo, tagliato a 500 caratteri |
-| `depends_on` | nullo | Id di un'altra integrazione da eseguire prima |
+| `depends_on` | nullo | Id di un'altra integrazione da eseguire prima. Con un solo padre il figlio parte anche se il padre fallisce |
+| `depends_json` | nullo | Elenco di padri, solo se sono più di uno. Il figlio parte quando tutti sono `ok` |
+| `write_back` | default 0 | 1 aggiorna la sorgente, e solo i campi di `write_fields` |
+| `activity_json` | nullo | Compito, chiamata o riunione nati con il record, solo alla creazione |
+| `portal_json` | nullo | Regola di visibilità per un portale. Resta spenta finché non la si accende su Espo |
 | `cursor_column` | nullo | Colonna di variazione del database in ingresso |
 | `enabled` | default 1 | 0 mette in pausa pianificatore e webhook |
 | `on_duplicate` | default `fail` | `fail` scarta il simile con un'altra chiave. `adopt` lo aggiorna |
@@ -30,7 +34,7 @@ Una riga è un'integrazione.
 | `file_alert` | default 0 | 1 finché il file atteso non ha un giro riuscito |
 | `balance_json` | nullo | Ultima quadratura: conteggi, chiavi solo da una parte, scarto importi |
 
-Le sei colonne da `key_field` in poi non c'erano nella prima creazione. `init_db` le aggiunge con `ALTER` se `PRAGMA table_info` non le vede. Un file vecchio si apre ancora.
+Le colonne aggiunte dopo la prima creazione non c'erano nel file di allora. `init_db` le aggiunge con `ALTER` se `PRAGMA table_info` non le vede. Un file vecchio si apre ancora.
 
 `/api/pull/{id}` scrive il cursore e il sink e non aggiorna `last_run`. Per questo un'integrazione può avere righe in `sink_item` e `last_status` vuoto. «Esegui ora» passa da `run_pipeline` e invece aggiorna i tre campi.
 
@@ -40,7 +44,7 @@ Le sei colonne da `key_field` in poi non c'erano nella prima creazione. `init_db
 |---|---|
 | `id` | Slug |
 | `name` | Nome in pagina |
-| `kind` | `webhook`, `database`, `csv`, `http`, `pdf`, `sftp`, `ftps` |
+| `kind` | `webhook`, `database`, `csv`, `http`, `pdf`, `documento`, `sftp`, `ftps` |
 | `config_json` | Vedi sotto. La password del database sta in chiaro in questo file, sul volume locale |
 | `token` | Segreto URL-safe di 24 byte. Nasce alla creazione e non viene rigenerato da un aggiornamento |
 
@@ -50,7 +54,7 @@ Le sei colonne da `key_field` in poi non c'erano nella prima creazione. `init_db
 |---|---|
 | webhook | `{}`, oppure `signSecret` se la firma è accesa |
 | csv | `{}` |
-| http | `url`, e l'autenticazione: nessuna, Bearer, basic, intestazione, oppure OAuth (`tokenUrl`, `clientId`, `scope`) |
+| http | `url`, l'autenticazione (nessuna, Bearer, basic, intestazione, oppure OAuth) e `deliverTo`, l'integrazione a cui la casella consegna. Vuoto: la casella accumula |
 | database | `host`, `port`, `database`, `user`, `password`, `query` |
 
 La lettura verso la pagina toglie password, segreto della firma, client secret e token, e mette il segno che ci sono.

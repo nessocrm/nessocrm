@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -160,10 +160,18 @@ def init_db() -> None:
             "propose_field": "TEXT",
             "propose_value": "TEXT",
             "alert_minutes": "INTEGER",
+            "depends_json": "TEXT",
+            "write_back": "INTEGER NOT NULL DEFAULT 0",
+            "write_fields": "TEXT",
+            "activity_json": "TEXT",
+            "portal_json": "TEXT",
         }
         for name, ddl in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE pipeline ADD COLUMN {name} {ddl}")
+        scarto_columns = {row["name"] for row in conn.execute("PRAGMA table_info(scarto)")}
+        if "resolved" not in scarto_columns:
+            conn.execute("ALTER TABLE scarto ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS setting (
@@ -205,6 +213,30 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 pipeline_id TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS mapping_version (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                mapping_json TEXT NOT NULL,
+                author TEXT,
+                saved_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sheet_field (
+                entity TEXT NOT NULL,
+                name TEXT NOT NULL,
+                label TEXT NOT NULL,
+                PRIMARY KEY (entity, name)
+            );
+            CREATE TABLE IF NOT EXISTS mail_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_at TEXT,
+                last_error TEXT,
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS plan_step (
@@ -491,7 +523,18 @@ def add_sheet_field(entity: str, body: dict) -> dict:
         if status == 409 or "already exists" in message.lower():
             raise RuntimeError("questo campo c'è già")
         raise RuntimeError(f"{entity}.{requested}: HTTP {status} {message}")
-    show_on_layout(entity, [actual])
+    places = None
+    if isinstance(body.get("listPosition"), int):
+        places = {"list": body["listPosition"]}
+    if body.get("kanban") in (True, 1, "1"):
+        places = places or {}
+        places["kanban"] = True
+    show_on_layout(entity, [actual], places)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO sheet_field (entity, name, label) VALUES (?, ?, ?) ON CONFLICT(entity, name) DO UPDATE SET label = excluded.label",
+            (entity, actual, label),
+        )
     CATALOG["at"] = 0
     return {"name": actual, "label": label, "type": kind}
 
@@ -537,18 +580,25 @@ def create_espo_entity(singular: str, plural: str) -> str:
     return name
 
 
-def create_lookup(entity: str, foreign: str, label: str, back_label: str | None = None) -> str:
+def create_lookup(entity: str, foreign: str, label: str, back_label: str | None = None, wanted: str | None = None) -> str:
     existing = links_of(entity)
-    for link_name, link in existing.items():
-        if isinstance(link, dict) and link.get("type") == "belongsTo" and link.get("entity") == foreign:
-            return link_name
+    matches = [
+        link_name
+        for link_name, link in existing.items()
+        if isinstance(link, dict) and link.get("type") == "belongsTo" and link.get("entity") == foreign
+    ]
+    chosen = carico.link_choice(matches, wanted or "")
+    if chosen and chosen in matches:
+        return chosen
+    if not wanted and len(matches) == 1:
+        return matches[0]
     source = bare_entity(foreign)
     source = source[0].lower() + source[1:]
     foreign_name = bare_entity(entity)
     if not foreign_name.endswith("s"):
         foreign_name += "s"
     foreign_name = foreign_name[0].lower() + foreign_name[1:]
-    candidate = source
+    candidate = chosen or source
     taken = set(existing)
     suffix = 2
     while candidate in taken:
@@ -580,7 +630,7 @@ def create_lookup(entity: str, foreign: str, label: str, back_label: str | None 
     raise RuntimeError(f"collegamento verso {foreign} non comparso nel metadata")
 
 
-def show_on_layout(entity: str, names: list[str]) -> None:
+def show_on_layout(entity: str, names: list[str], places: dict | None = None) -> None:
     wanted = [name for name in names if name and name != "name"]
     if not wanted:
         return
@@ -615,10 +665,27 @@ def show_on_layout(entity: str, names: list[str]) -> None:
     changed = False
     for name in extra:
         if name not in listed:
-            cols.append({"name": name})
+            if places and isinstance(places.get("list"), int):
+                names_only = [col.get("name") for col in cols if isinstance(col, dict)]
+                ordered = carico.place_names(names_only, name, places["list"])
+                rebuilt = []
+                by_name = {col.get("name"): col for col in cols if isinstance(col, dict)}
+                for item in ordered:
+                    rebuilt.append(by_name.get(item) or {"name": item})
+                cols = rebuilt
+            else:
+                cols.append({"name": name})
             changed = True
     if changed:
         espo_request("PUT", f"/api/v1/{entity}/layout/list", cols)
+    if places and places.get("kanban"):
+        code, board = espo_request("GET", f"/api/v1/{entity}/layout/kanban")
+        columns = board if code == 200 and isinstance(board, list) else []
+        present = {col.get("name") for col in columns if isinstance(col, dict)}
+        for name in extra:
+            if name not in present:
+                columns.append({"name": name})
+        espo_request("PUT", f"/api/v1/{entity}/layout/kanban", columns)
 
 
 def prepare_espo() -> None:
@@ -804,6 +871,8 @@ def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: 
         value = apply_transform(rule, payload)
         if value is None or value == "":
             continue
+        if rule.get("zone"):
+            value = carico.wall_clock(value)
         if rule.get("kind") in ("date", "fiscale", "enum"):
             value = carico.check_quality(value, rule.get("kind"), rule.get("options"), rule.get("to") or "")
         if rule.get("kind") == "bool":
@@ -814,6 +883,9 @@ def map_payload(mapping: list[dict], payload: dict, key: str | None, key_field: 
                 mapped[rule["to"]] = phone
         else:
             mapped[rule["to"]] = value
+        if rule.get("currencyDefault") and rule.get("currencyField") and not mapped.get(rule["currencyField"]):
+            if not str(payload.get(rule["currencyField"]) or "").strip():
+                mapped[rule["currencyField"]] = str(rule["currencyDefault"])
     if key and key_field:
         mapped[key_field] = key
     return mapped
@@ -910,6 +982,11 @@ def upsert(
             label = existing.get("name") or existing.get("id")
             raise RuntimeError(f"Espo ha già un record simile ({label}) con un'altra chiave")
     if code not in (200, 201) or not isinstance(result, dict) or "id" not in result:
+        named = carico.describe_espo_error(result)
+        if named:
+            raise RuntimeError(f"{named}. scrittura {entity} HTTP {code}")
+        if result in (None, "", [], {}):
+            raise RuntimeError(f"scrittura {entity} HTTP {code}: risposta vuota")
         raise RuntimeError(f"scrittura {entity} HTTP {code}: {result}")
     if token:
         remember_key(entity, token, result["id"])
@@ -1085,6 +1162,9 @@ def ingest(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
             raise RuntimeError(f"manca il campo {row['external_id_field']}")
         key = render_key(row["key_template"], payload)
         mapping = json.loads(row["mapping_json"])
+        missing_required = carico.empty_required(mapping, payload)
+        if missing_required:
+            raise RuntimeError(f"campo {missing_required}: obbligatorio")
         key_field = row["key_field"] or "cExternalKey"
         on_duplicate = row["on_duplicate"] if "on_duplicate" in row.keys() and row["on_duplicate"] else "fail"
         mapped = map_payload(mapping, payload, key, key_field, dry=hold)
@@ -1190,7 +1270,50 @@ def ingest(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
             note_stage(row, payload)
         except Exception:
             pass
+        try:
+            note_origin(row["espo_entity"], row["name"], espo_id, key, now)
+        except Exception:
+            pass
+        try:
+            open_activity(row, espo_id, action == "creato")
+        except Exception:
+            pass
         return {"status": action, "espoId": espo_id, "externalKey": key, "entity": row["espo_entity"], "diffs": diffs}
+
+
+def note_origin(entity: str, name: str, espo_id: str, key: str, when: str) -> None:
+    espo_request(
+        "POST",
+        "/api/v1/Note",
+        {
+            "type": "Post",
+            "post": carico.note_line(name, key, when),
+            "parentType": entity,
+            "parentId": espo_id,
+        },
+    )
+
+
+def open_activity(row: sqlite3.Row, espo_id: str, creating: bool) -> None:
+    raw = row["activity_json"] if "activity_json" in row.keys() else None
+    if not raw:
+        return
+    spec = json.loads(raw)
+    if not isinstance(spec, dict) or not carico.activity_opens(creating, bool(spec.get("repeat"))):
+        return
+    kind = str(spec.get("type") or "Task")
+    if kind not in ("Task", "Call", "Meeting"):
+        return
+    body = {
+        "name": str(spec.get("name") or row["name"]),
+        "parentType": row["espo_entity"],
+        "parentId": espo_id,
+    }
+    if spec.get("date"):
+        body["dateStart"] = str(spec["date"])
+    if spec.get("assignee"):
+        body["assignedUserId"] = str(spec["assignee"])
+    espo_request("POST", f"/api/v1/{kind}", body)
 
 
 def espo_page(entity: str, select: str, where: list[tuple[str, str, str]], order_by: str) -> list:
@@ -1307,16 +1430,35 @@ def outbound_rows(pipeline_id: str, limit: int = 1000) -> list[dict]:
     records = []
     for item in items:
         outgoing = {}
+        missing_key = ""
         for rule in mapping:
             value = item.get(rule["from"])
-            if value is not None:
+            if rule.get("as") == "chiave":
+                external = external_key_for(str(rule.get("lookupEntity") or ""), str(value or ""))
+                if not external:
+                    missing_key = str(rule.get("to") or rule.get("from") or "collegamento")
+                    break
+                outgoing[rule["to"]] = external
+            elif value is not None:
                 outgoing[rule["to"]] = value
         records.append({
             "espoId": item.get("id"),
             "modifiedAt": item.get("modifiedAt") or "",
             "payload": outgoing,
+            "missingKey": missing_key,
         })
     return records
+
+
+def external_key_for(entity: str, espo_id: str) -> str:
+    if not entity or not espo_id:
+        return ""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT external_key FROM chiave WHERE entity = ? AND espo_id = ?",
+            (entity, espo_id),
+        ).fetchone()
+    return row["external_key"] if row else ""
 
 
 def remember_sink(pipeline_id: str, espo_id: str, payload: dict) -> None:
@@ -1340,6 +1482,8 @@ def pull(pipeline_id: str) -> dict:
     records = outbound_rows(pipeline_id)
     last = None
     for item in records:
+        if item.get("missingKey"):
+            continue
         remember_sink(pipeline_id, item["espoId"], item["payload"])
         if item.get("espoId") or item.get("modifiedAt"):
             last = item
@@ -1349,7 +1493,7 @@ def pull(pipeline_id: str) -> dict:
         "exported": len(records),
         "cursor": cursor,
         "missingDate": missing_date,
-        "records": [item["payload"] for item in records],
+        "records": [item["payload"] for item in records if not item.get("missingKey")],
     }
 
 
@@ -1472,8 +1616,151 @@ def notice_absent(now: datetime | None = None) -> list[str]:
 
 
 def deliver_notice(notice: dict) -> None:
-    """Punto unico per la posta del motore. Oggi non invia, e non usa la posta di Espo."""
+    """Punto unico per la posta del motore. Senza SMTP non invia, e non usa la posta di Espo."""
+    if not carico.mail_ready(setting_value("smtp_host")):
+        return None
+    name = str(notice.get("name") or notice.get("pipelineId") or "")
+    kind = str(notice.get("kind") or "avviso")
+    subject = f"Nesso: {name}"
+    if kind == "silenzio":
+        body = f"{name} tace da più di {notice.get('minutes') or 0} minuti."
+    else:
+        body = f"{name}: il giro non è riuscito."
+    queue_mail(kind, subject, body)
     return None
+
+
+def queue_mail(kind: str, subject: str, body: str) -> int:
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO mail_queue (kind, subject, body, status, attempts, next_at, created_at)
+            VALUES (?, ?, ?, 'attesa', 0, ?, ?)
+            """,
+            (kind, subject, body, now, now),
+        )
+        queued = cursor.lastrowid
+    retry_mail()
+    return int(queued or 0)
+
+
+def send_smtp(subject: str, body: str) -> None:
+    host = setting_value("smtp_host")
+    if not carico.mail_ready(host):
+        raise RuntimeError("manca l'indirizzo SMTP")
+    import smtplib
+    from email.message import EmailMessage
+
+    message = EmailMessage()
+    message["From"] = setting_value("smtp_from") or "nesso@localhost"
+    message["To"] = setting_value("smtp_to") or message["From"]
+    message["Subject"] = subject
+    message.set_content(body)
+    port = int(setting_value("smtp_port") or "587")
+    with smtplib.SMTP(host, port, timeout=15) as client:
+        if setting_value("smtp_tls") == "1":
+            client.starttls()
+        user = setting_value("smtp_user")
+        secret = setting_value("smtp_secret")
+        if user:
+            client.login(user, secret)
+        client.send_message(message)
+
+
+def retry_mail(sender=None) -> int:
+    if not carico.mail_ready(setting_value("smtp_host")):
+        return 0
+    caller = sender or send_smtp
+    sent = 0
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM mail_queue WHERE status = 'attesa' AND (next_at IS NULL OR next_at <= ?) ORDER BY id",
+            (now,),
+        ).fetchall()
+    for row in rows:
+        try:
+            caller(row["subject"], row["body"])
+        except Exception as error:
+            attempts = int(row["attempts"] or 0) + 1
+            wait = min(60 * (2 ** min(attempts, 6)), 24 * 60)
+            later = (datetime.now() + timedelta(minutes=wait)).strftime("%Y-%m-%d %H:%M:%S")
+            status = "attesa" if attempts < 8 else "scarto"
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE mail_queue SET attempts = ?, status = ?, next_at = ?, last_error = ? WHERE id = ?",
+                    (attempts, status, later, str(error)[:180], row["id"]),
+                )
+            continue
+        with connect() as conn:
+            conn.execute("UPDATE mail_queue SET status = 'inviato', attempts = attempts + 1 WHERE id = ?", (row["id"],))
+        sent += 1
+    return sent
+
+
+def imap_fetch() -> list[dict]:
+    host = setting_value("imap_host")
+    if not carico.mail_ready(host):
+        return []
+    import email
+    import imaplib
+
+    port = int(setting_value("imap_port") or "993")
+    client = imaplib.IMAP4_SSL(host, port, timeout=8)
+    try:
+        client.login(setting_value("imap_user"), setting_value("imap_secret"))
+        client.select("INBOX")
+        _kind, data = client.search(None, "UNSEEN")
+        found = []
+        for number in (data[0] or b"").split()[:20]:
+            _kind, payload = client.fetch(number, "(RFC822)")
+            raw = payload[0][1] if payload and isinstance(payload[0], tuple) else b""
+            parsed = email.message_from_bytes(raw)
+            text = ""
+            if parsed.is_multipart():
+                for part in parsed.walk():
+                    if part.get_content_type() == "text/plain":
+                        text = (part.get_payload(decode=True) or b"").decode(errors="replace")
+                        break
+            else:
+                text = (parsed.get_payload(decode=True) or b"").decode(errors="replace")
+            found.append({
+                "id": (parsed.get("Message-ID") or number.decode(errors="replace"))[:180],
+                "da": parsed.get("From") or "",
+                "oggetto": parsed.get("Subject") or "",
+                "testo": text[:4000],
+            })
+            client.store(number, "+FLAGS", "\\Seen")
+        return found
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+
+
+def take_mail(messages: list[dict], pipeline_id: str) -> int:
+    taken = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        result = ingest_row(pipeline_id, message)
+        if result.get("status") != "scartato":
+            taken += 1
+    return taken
+
+
+def poll_imap() -> int:
+    pipeline_id = setting_value("imap_pipeline")
+    if not carico.mail_ready(setting_value("imap_host")) or not pipeline_id:
+        return 0
+    try:
+        messages = imap_fetch()
+    except Exception as error:
+        print("[motore] imap", type(error).__name__)
+        return 0
+    return take_mail(messages, pipeline_id)
 
 
 def open_notice(pipeline_id: str, kind: str, minutes: int = 0) -> bool:
@@ -1928,7 +2215,21 @@ def kept_map(rule: dict) -> dict | None:
 
 def with_policy(rule: dict, compiled: dict) -> dict:
     compiled["onMiss"] = miss_policy(rule)
-    return compiled
+    return keep_extras(rule, compiled)
+
+
+def keep_extras(rule: dict, item: dict) -> dict:
+    if rule.get("zone"):
+        item["zone"] = str(rule["zone"])
+    if rule.get("currencyDefault"):
+        item["currencyDefault"] = str(rule["currencyDefault"])
+    if rule.get("currencyField"):
+        item["currencyField"] = str(rule["currencyField"])
+    if rule.get("as") == "chiave":
+        item["as"] = "chiave"
+        if rule.get("lookupEntity"):
+            item["lookupEntity"] = str(rule["lookupEntity"])
+    return item
 
 
 def compile_rules(entity: str, rules: list, creating: bool, back_label: str | None = None) -> list[dict]:
@@ -1985,6 +2286,7 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
                 }))
                 continue
             existing = by_name.get(target)
+            wanted = str(rule.get("linkName") or "").strip()
             if existing and existing.get("type") == "link" and existing.get("foreignEntity") == foreign:
                 link_name = target
             else:
@@ -1992,10 +2294,14 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
                     field for field in meta["fields"]
                     if field.get("type") == "link" and field.get("foreignEntity") == foreign
                 ]
-                if len(matches) == 1:
+                if wanted and any(field.get("name") == wanted for field in matches):
+                    link_name = wanted
+                elif len(matches) == 1 and not wanted:
                     link_name = matches[0]["name"]
+                elif len(matches) > 1 and not wanted:
+                    raise RuntimeError("indica il nome del collegamento")
                 else:
-                    link_name = create_lookup(entity, foreign, foreign_meta["label"], back_label)
+                    link_name = create_lookup(entity, foreign, foreign_meta["label"], back_label, wanted or None)
             compiled.append(with_policy(rule, {
                 "from": source,
                 "to": link_name + "Id",
@@ -2041,7 +2347,7 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
         mapped_values = kept_map(rule)
         if transform == "map" and mapped_values:
             item["valueMap"] = mapped_values
-        compiled.append(item)
+        compiled.append(keep_extras(rule, item))
     if not compiled:
         raise RuntimeError("abbina almeno un campo")
     show_on_layout(entity, layout_names)
@@ -2101,7 +2407,7 @@ def save_pipeline(body: dict) -> dict:
                 continue
             if source not in known:
                 raise RuntimeError("campi Espo non riconosciuti: " + source)
-            clean.append({"from": source, "to": target, "transform": "copy"})
+            clean.append(keep_extras(rule, {"from": source, "to": target, "transform": "copy"}))
         if not clean:
             raise RuntimeError("abbina almeno un campo")
         key_field = meta["keyField"]
@@ -2121,7 +2427,9 @@ def save_pipeline(body: dict) -> dict:
     cursor_column = str(body.get("cursorColumn") or "").strip()
     if cursor_column:
         safe_ident(cursor_column)
-    depends_on = str(body.get("dependsOn") or "").strip()
+    raw_parents = body.get("dependsOn")
+    parent_list = carico.parent_ids("", raw_parents) if isinstance(raw_parents, list) else []
+    depends_on = parent_list[0] if parent_list else str(raw_parents or "").strip()
     with connect() as conn:
         if connection_id:
             link = conn.execute("SELECT * FROM connection WHERE id = ?", (connection_id,)).fetchone()
@@ -2158,6 +2466,13 @@ def save_pipeline(body: dict) -> dict:
             enabled = 1
         if "dependsOn" not in body and previous is not None:
             depends_on = previous["depends_on"] or ""
+            parent_list = []
+            if previous["depends_json"]:
+                try:
+                    kept = json.loads(previous["depends_json"])
+                    parent_list = kept if isinstance(kept, list) else []
+                except json.JSONDecodeError:
+                    parent_list = []
         if "cursorColumn" not in body and previous is not None:
             cursor_column = previous["cursor_column"] or ""
         if "onDuplicate" not in body and previous is not None and previous["on_duplicate"]:
@@ -2175,8 +2490,10 @@ def save_pipeline(body: dict) -> dict:
             )
             if choice:
                 close_field, close_value = choice
+        if len(parent_list) > 1:
+            depends_on = parent_list[0]
         if depends_on:
-            if depends_on == pipeline_id:
+            if depends_on == pipeline_id or pipeline_id in parent_list:
                 raise RuntimeError("un'integrazione non può aspettare sé stessa")
             seen = {pipeline_id}
             current = depends_on
@@ -2283,6 +2600,30 @@ def save_pipeline(body: dict) -> dict:
             raw = str(body.get("alertMinutes") or "").strip()
             minutes = int(raw) if raw.isdigit() and int(raw) > 0 else None
             conn.execute("UPDATE pipeline SET alert_minutes = ? WHERE id = ?", (minutes, pipeline_id))
+        depends_json = json.dumps(parent_list, ensure_ascii=False) if len(parent_list) > 1 else None
+        if "dependsOn" not in body and previous is not None:
+            depends_json = previous["depends_json"]
+        write_back = int(previous["write_back"] or 0) if previous is not None else 0
+        write_fields = previous["write_fields"] if previous is not None else None
+        activity_json = previous["activity_json"] if previous is not None else None
+        portal_json = previous["portal_json"] if previous is not None else None
+        if "writeBack" in body:
+            write_back = 0 if body.get("writeBack") in (False, 0, "0", "", None) else 1
+        if "writeFields" in body and isinstance(body.get("writeFields"), list):
+            write_fields = json.dumps([str(item) for item in body["writeFields"] if str(item).strip()], ensure_ascii=False)
+        if "activity" in body:
+            activity_json = json.dumps(body.get("activity") or {}, ensure_ascii=False) if body.get("activity") else None
+        if "portal" in body:
+            portal_json = json.dumps(body.get("portal") or {}, ensure_ascii=False) if body.get("portal") else None
+        conn.execute(
+            """
+            UPDATE pipeline
+            SET depends_json = ?, write_back = ?, write_fields = ?, activity_json = ?, portal_json = ?
+            WHERE id = ?
+            """,
+            (depends_json, write_back, write_fields, activity_json, portal_json, pipeline_id),
+        )
+        remember_version(pipeline_id, clean, str(body.get("author") or ""))
     try:
         sync_service_role()
     except Exception as error:
@@ -2498,7 +2839,7 @@ def save_connection(body: dict) -> dict:
     kind = body.get("kind")
     if not name:
         raise RuntimeError("manca il nome del collegamento")
-    if kind not in ("webhook", "database", "csv", "http", "pdf", "sftp", "ftps"):
+    if kind not in ("webhook", "database", "csv", "http", "pdf", "sftp", "ftps", "documento"):
         raise RuntimeError("tipo di collegamento non riconosciuto")
     config = body.get("config") or {}
     if kind == "database":
@@ -2560,6 +2901,12 @@ def save_connection(body: dict) -> dict:
             "refreshToken": str(config.get("refreshToken") or ""),
             "tokenObtained": str(config.get("tokenObtained") or ""),
             "expiresIn": int(config.get("expiresIn") or 0),
+            "deliverTo": str(config.get("deliverTo") or "").strip(),
+        }
+    if kind == "documento":
+        config = {
+            "documentFolder": str(config.get("documentFolder") or "").strip(),
+            "team": str(config.get("team") or "").strip(),
         }
     if kind == "webhook":
         config = {"signSecret": str(config.get("signSecret") or "").strip()}
@@ -2630,7 +2977,7 @@ def save_connection(body: dict) -> dict:
             """,
             (connection_id, name, kind, json.dumps(config, ensure_ascii=False), token),
         )
-    if kind == "csv":
+    if kind == "csv" or kind == "documento":
         folder = SCAMBIO / connection_id
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "elaborati").mkdir(exist_ok=True)
@@ -3095,7 +3442,36 @@ def accept_inbox(connection_id: str, token: str, body: dict) -> dict:
     if row is None or row["kind"] != "http" or not hmac.compare_digest(row["token"], token):
         raise PermissionError("casella non valida")
     remember_delivery(None, connection_id, body, "ricevuto", "sistema esterno")
-    return {"stored": True}
+    delivered = deliver_inbox(connection_id, body)
+    return {"stored": True, "delivered": delivered}
+
+
+def deliver_inbox(connection_id: str, body: dict) -> bool:
+    with connect() as conn:
+        row = conn.execute("SELECT config_json FROM connection WHERE id = ?", (connection_id,)).fetchone()
+        if row is None:
+            return False
+        config = json.loads(row["config_json"] or "{}")
+        target = str(config.get("deliverTo") or "").strip()
+        if not target:
+            return False
+        pipeline = conn.execute("SELECT enabled FROM pipeline WHERE id = ?", (target,)).fetchone()
+    if pipeline is None or pipeline["enabled"] == 0:
+        return False
+    latest = None
+    with connect() as conn:
+        latest = conn.execute(
+            "SELECT id, status FROM delivery WHERE connection_id = ? ORDER BY id DESC LIMIT 1",
+            (connection_id,),
+        ).fetchone()
+    if latest is None or latest["status"] == "consegnato":
+        return False
+    result = ingest_row(target, body if isinstance(body, dict) else {"valore": body})
+    if result.get("status") == "scartato":
+        return False
+    with connect() as conn:
+        conn.execute("UPDATE delivery SET status = 'consegnato' WHERE id = ?", (latest["id"],))
+    return True
 
 
 def pipeline_due(row: sqlite3.Row, now: float | None = None) -> bool:
@@ -3129,7 +3505,7 @@ def preview_row(pipeline: sqlite3.Row, payload: dict) -> dict:
     return {"externalId": external, "mapped": mapped}
 
 
-def dry_run(pipeline_id: str) -> dict:
+def dry_run(pipeline_id: str, sample=None) -> dict:
     with connect() as conn:
         pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
         link = None
@@ -3143,7 +3519,22 @@ def dry_run(pipeline_id: str) -> dict:
     if link is None:
         raise RuntimeError("collega un sistema esterno prima della prova")
     if link["kind"] == "webhook":
-        return {"detail": "Il webhook non ha righe da leggere. L'anteprima si fa quando il sistema esterno chiama.", "rows": []}
+        if sample is None:
+            return {"detail": "Il webhook non ha righe da leggere. L'anteprima si fa quando il sistema esterno chiama.", "rows": []}
+        try:
+            records = carico.hook_records(sample)
+        except RuntimeError as error:
+            return {"detail": str(error), "rows": []}
+        rows = []
+        for payload in records:
+            if not isinstance(payload, dict):
+                rows.append({"status": "scartato", "detail": "il corpo deve essere un oggetto o un elenco"})
+                continue
+            try:
+                rows.append(preview_row(pipeline, payload))
+            except Exception as error:
+                rows.append({"status": "scartato", "detail": str(error)})
+        return {"rows": rows}
     config = json.loads(link["config_json"])
     if link["kind"] == "database":
         source = read_database(
@@ -3668,6 +4059,187 @@ def execute_remote_out(pipeline_id: str, kind: str, config: dict) -> dict:
     return {"sent": len(records), "missingDate": missing_date}
 
 
+def write_source(pipeline: sqlite3.Row, link: sqlite3.Row, rows: list[dict]) -> int:
+    if "write_back" not in pipeline.keys() or not int(pipeline["write_back"] or 0):
+        return 0
+    if link is None or link["kind"] != "database":
+        return 0
+    config = json.loads(link["config_json"] or "{}")
+    raw_fields = pipeline["write_fields"] or "[]"
+    try:
+        columns = json.loads(raw_fields)
+    except json.JSONDecodeError:
+        columns = []
+    if not isinstance(columns, list):
+        columns = []
+    names = [str(item) for item in columns if str(item).strip()]
+    sql = carico.write_back_sql(
+        True,
+        str(config.get("writeTable") or ""),
+        pipeline["external_id_field"],
+        names,
+        str(config.get("engine") or "mysql"),
+    )
+    if not sql:
+        raise RuntimeError("manca la tabella di ritorno")
+    written = 0
+    connection = open_sql(config)
+    try:
+        for row in rows:
+            key = str(row.get(pipeline["external_id_field"]) or "")
+            if not key:
+                continue
+            values = [row.get(name) for name in names]
+            connection.cursor().execute(sql, (*values, key))
+            written += 1
+        connection.commit()
+    finally:
+        connection.close()
+    return written
+
+
+def execute_documento(pipeline: sqlite3.Row, link: sqlite3.Row, held: bool) -> dict:
+    config = json.loads(link["config_json"] or "{}")
+    folder = SCAMBIO / link["id"]
+    folder.mkdir(parents=True, exist_ok=True)
+    done = folder / "elaborati"
+    done.mkdir(exist_ok=True)
+    taken = 0
+    for path in sorted(folder.iterdir()):
+        if not path.is_file():
+            continue
+        if held:
+            taken += 1
+            continue
+        try:
+            file_id = upload_attachment(path)
+        except Exception as error:
+            remember_reject(pipeline["id"], path.name, {"file": path.name}, str(error))
+            continue
+        code, result = espo_request(
+            "POST",
+            "/api/v1/Document",
+            {
+                "name": path.name,
+                "fileId": file_id,
+                "folderId": config.get("documentFolder") or None,
+                "teamsIds": [config["team"]] if config.get("team") else [],
+            },
+        )
+        if code not in (200, 201):
+            remember_reject(pipeline["id"], path.name, {"file": path.name}, f"documento HTTP {code}")
+            continue
+        path.rename(done / f"{time.strftime('%Y%m%d%H%M%S')}-{path.name}")
+        taken += 1
+    status = "lettura" if held else "ok"
+    mark_run(pipeline["id"], status, f"{taken} documenti")
+    return {"taken": taken, "held": held}
+
+
+def replay_reject(scarto_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM scarto WHERE id = ?", (scarto_id,)).fetchone()
+    if row is None:
+        raise KeyError(scarto_id)
+    try:
+        payload = json.loads(row["payload_json"])
+    except json.JSONDecodeError:
+        payload = {}
+    try:
+        result = ingest(row["pipeline_id"], payload if isinstance(payload, dict) else {})
+    except Exception as error:
+        with connect() as conn:
+            conn.execute("UPDATE scarto SET detail = ?, resolved = 0 WHERE id = ?", (str(error)[:500], scarto_id))
+        return {"status": "scartato", "detail": str(error)}
+    with connect() as conn:
+        conn.execute(
+            "UPDATE scarto SET detail = ?, resolved = 1 WHERE id = ?",
+            ("riuscita " + str(result.get("status") or ""), scarto_id),
+        )
+    return result
+
+
+def rename_field(entity: str, name: str, label: str) -> dict:
+    label = str(label or "").strip()
+    if not label:
+        raise RuntimeError("indica l'etichetta del campo")
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT name FROM sheet_field WHERE entity = ? AND name = ?",
+            (entity, name),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("questo campo non l'ha creato Nesso")
+    status, result = espo_request("PUT", f"/api/v1/Admin/fieldManager/{entity}/{name}", {"label": label})
+    if status not in (200, 201):
+        raise RuntimeError(f"{entity}.{name}: HTTP {status}")
+    with connect() as conn:
+        conn.execute("UPDATE sheet_field SET label = ? WHERE entity = ? AND name = ?", (label, entity, name))
+    return {"name": name, "label": label}
+
+
+def remember_version(pipeline_id: str, mapping: list, author: str) -> None:
+    raw = json.dumps(mapping, ensure_ascii=False)
+    with connect() as conn:
+        previous = conn.execute(
+            "SELECT mapping_json FROM mapping_version WHERE pipeline_id = ? ORDER BY id DESC LIMIT 1",
+            (pipeline_id,),
+        ).fetchone()
+        if previous is not None and previous["mapping_json"] == raw:
+            return
+        conn.execute(
+            "INSERT INTO mapping_version (pipeline_id, mapping_json, author, saved_at) VALUES (?, ?, ?, ?)",
+            (pipeline_id, raw, author or "", time.strftime("%Y-%m-%d %H:%M:%S")),
+        )
+
+
+def mapping_versions(pipeline_id: str) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, author, saved_at FROM mapping_version WHERE pipeline_id = ? ORDER BY id DESC",
+            (pipeline_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def restore_version(pipeline_id: str, version_id: int, author: str = "") -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT mapping_json FROM mapping_version WHERE id = ? AND pipeline_id = ?",
+            (version_id, pipeline_id),
+        ).fetchone()
+        current = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
+    if row is None or current is None:
+        raise KeyError(version_id)
+    body = {
+        "id": pipeline_id,
+        "name": current["name"],
+        "direction": current["direction"],
+        "espoEntity": current["espo_entity"],
+        "externalIdField": current["external_id_field"],
+        "connectionId": current["connection_id"],
+        "mapping": json.loads(row["mapping_json"]),
+        "author": author,
+    }
+    return save_pipeline(body)
+
+
+def passaggio_config() -> dict:
+    data = export_config()
+    data["passaggio"] = True
+    data["ambiente"] = setting_value("ambiente") or "prova"
+    for item in data.get("connections") or []:
+        config = dict(item.get("config") or {})
+        for key in ("host", "url", "tokenUrl", "tunnelHost"):
+            if config.get(key):
+                config[key] = ""
+        for key in ("password", "token", "headerValue", "clientSecret", "signSecret", "accessToken", "refreshToken", "tunnelPassword"):
+            config.pop(key, None)
+            config.pop("has" + key[:1].upper() + key[1:], None)
+        item["config"] = config
+    return data
+
+
 def execute_pipeline(pipeline_id: str) -> dict:
     with connect() as conn:
         pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
@@ -3710,6 +4282,12 @@ def execute_pipeline(pipeline_id: str) -> dict:
                 save_cursor(pipeline_id, stamp, identity)
         settle_closes(pipeline, seen, counts, full=not pipeline["cursor_column"], hold=held)
         status, detail = finish_counts(f"{len(rows)} righe dal database", counts)
+        if "write_back" in pipeline.keys() and int(pipeline["write_back"] or 0):
+            try:
+                write_source(pipeline, link, rows)
+            except Exception as error:
+                status = "errore"
+                detail = detail + ". " + str(error)
         mark_run(pipeline_id, status, detail, counts)
         return run_result(len(rows), counts, status)
     if link["kind"] == "csv":
@@ -3752,6 +4330,8 @@ def execute_pipeline(pipeline_id: str) -> dict:
         return run_result(taken, counts, status)
     if link["kind"] == "pdf":
         return execute_pdf(pipeline, link, held)
+    if link["kind"] == "documento":
+        return execute_documento(pipeline, link, held)
     if link["kind"] == "http":
         records = outbound_rows(pipeline_id)
         url = str(config.get("url") or "").strip() or f"http://127.0.0.1:{PORT}/inbox/{link['id']}/{link['token']}"
@@ -3760,6 +4340,11 @@ def execute_pipeline(pipeline_id: str) -> dict:
         last = None
         headers = outbound_headers(link["id"], config) if records else {}
         for item in records:
+            if item.get("missingKey"):
+                failed = "manca la chiave esterna di " + item["missingKey"]
+                remember_delivery(pipeline_id, link["id"], item["payload"], "errore", failed)
+                remember_reject(pipeline_id, item["espoId"] or "", item["payload"], failed)
+                break
             try:
                 post_json(url, item["payload"], headers)
             except Exception as error:
@@ -3794,6 +4379,38 @@ def execute_chain(pipeline_id: str, seen: set[str], with_dependencies: bool) -> 
         pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
     if pipeline is None:
         raise KeyError(pipeline_id)
+    extra = []
+    if "depends_json" in pipeline.keys() and pipeline["depends_json"]:
+        try:
+            parsed = json.loads(pipeline["depends_json"])
+        except json.JSONDecodeError:
+            parsed = []
+        if isinstance(parsed, list):
+            extra = [str(item) for item in parsed if str(item).strip()]
+    if len(extra) > 1:
+        blocked = []
+        for parent_id in extra:
+            with connect() as conn:
+                parent_row = conn.execute("SELECT * FROM pipeline WHERE id = ?", (parent_id,)).fetchone()
+            label = parent_row["name"] if parent_row else parent_id
+            if parent_row is None or carico.blocked_parent(parent_row["enabled"], parent_row["last_status"]):
+                blocked.append(label)
+                continue
+            if parent_row["last_status"] != "ok":
+                try:
+                    execute_chain(parent_id, seen, True)
+                except Exception:
+                    blocked.append(label)
+                    continue
+                with connect() as conn:
+                    again = conn.execute("SELECT last_status FROM pipeline WHERE id = ?", (parent_id,)).fetchone()
+                if again is None or again["last_status"] != "ok":
+                    blocked.append(label)
+        if blocked:
+            detail = "manca " + blocked[0]
+            mark_run(pipeline_id, "errore", detail)
+            return {"waiting": True, "missing": blocked, "detail": detail}
+        return execute_pipeline(pipeline_id)
     parent = pipeline["depends_on"]
     if parent:
         run_parent = with_dependencies
@@ -4377,6 +4994,9 @@ def export_config() -> dict:
 def import_config(body: dict) -> dict:
     if not isinstance(body, dict):
         raise RuntimeError("il file non è una configurazione")
+    if body.get("passaggio"):
+        holes = carico.passaggio_holes(body.get("connections") or [])
+        return {"passaggio": True, "mancano": holes, "salvate": 0}
     saved_connections = 0
     for item in body.get("connections") or []:
         if not isinstance(item, dict):
@@ -4645,6 +5265,8 @@ def scheduler() -> None:
                 notice_absent()
                 notice_quiet()
                 scan_person_badges()
+                retry_mail()
+                poll_imap()
             except Exception as error:
                 print("[motore] pianificazione", error)
         except Exception as error:
@@ -4827,7 +5449,47 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, run_pipeline(parts[2], bool(body.get("withDependencies"))))
                 return
             if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "dry":
-                self.send_json(200, dry_run(parts[2]))
+                length = int(self.headers.get("Content-Length") or 0)
+                sample = None
+                if length:
+                    loaded = self.read_json()
+                    if isinstance(loaded, dict) and "sample" in loaded:
+                        sample = loaded.get("sample")
+                    else:
+                        sample = loaded
+                self.send_json(200, dry_run(parts[2], sample))
+                return
+            if len(parts) == 6 and parts[:2] == ["api", "pipelines"] and parts[3] == "versioni" and parts[5] == "ripristina":
+                actor = actor_from_cookie(self)
+                self.send_json(200, restore_version(parts[2], int(parts[4]), actor["name"] if actor else ""))
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "scarti"] and parts[3] == "ripeti":
+                self.send_json(200, replay_reject(int(parts[2])))
+                return
+            if len(parts) == 5 and parts[:2] == ["api", "sheets"] and parts[3] == "fields":
+                body = self.read_json()
+                self.send_json(200, rename_field(parts[2], parts[4], str(body.get("label") or "")))
+                return
+            if path == "/api/passaggio":
+                self.send_json(200, passaggio_config())
+                return
+            if path == "/api/ambiente":
+                body = self.read_json()
+                ambiente = str(body.get("ambiente") or "").strip()
+                if ambiente not in ("prova", "esercizio"):
+                    self.send_fail(400, "l'ambiente è prova o esercizio")
+                    return
+                set_setting("ambiente", ambiente)
+                self.send_json(200, {"ambiente": ambiente})
+                return
+            if path == "/api/posta/prova":
+                if not carico.mail_ready(setting_value("smtp_host")):
+                    self.send_fail(400, "manca l'indirizzo SMTP")
+                    return
+                self.send_json(200, {"queued": queue_mail("prova", "Nesso: prova di invio", "Prova di invio del motore.")})
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "versioni":
+                self.send_json(200, {"versions": mapping_versions(parts[2])})
                 return
             if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] == "anteprima":
                 self.send_json(200, anteprima(parts[2]))

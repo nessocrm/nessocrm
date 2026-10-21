@@ -531,6 +531,24 @@ EN = {
     "manca clientId": "missing clientId",
     "manca clientSecret": "missing clientSecret",
     "il corpo deve essere un oggetto o un elenco": "the body must be an object or a list",
+    "Ripeti": "Retry",
+    "Riga rilanciata.": "Row sent again.",
+    "Non sono riuscito a rilanciare.": "I could not send it again.",
+    "Esempio del webhook": "Webhook example",
+    "Documento. Il file diventa un documento nella cartella e nel team scelti.": "Document. The file becomes a document in the chosen folder and team.",
+    "Consegna alla integrazione, facoltativa": "Deliver to the integration, optional",
+    "Se è vuota, la casella accumula e si ferma. Se l'integrazione è in pausa, accumula e non scarta.": "If it is empty, the inbox accumulates and stops. If the integration is paused, it accumulates and does not reject.",
+    "indica il nome del collegamento": "name the link",
+    "questo campo non l'ha creato Nesso": "Nesso did not create this field",
+    "manca la tabella di ritorno": "the write-back table is missing",
+    "manca l'indirizzo SMTP": "the SMTP address is missing",
+    "Etichetta di un campo di Nesso": "Label of a Nesso field",
+    "Nuova etichetta": "New label",
+    "Cambia l'etichetta": "Change the label",
+    "Etichetta aggiornata. Il nome tecnico resta.": "Label updated. The technical name stays.",
+    "Non sono riuscito a cambiare l'etichetta.": "I could not change the label.",
+    "l'ambiente è prova o esercizio": "the environment is trial or production",
+    "risposta vuota": "empty response",
 }
 
 _MODELLI = (
@@ -543,6 +561,10 @@ _MODELLI = (
     (re.compile(r"^colonna ripetuta (.+)$"), "repeated column {a}"),
     (re.compile(r"^la scheda (.+) non è nel ruolo di Nesso$"), "The entity {a} is not in Nesso's role."),
     (re.compile(r"^manca (host|database|user|query|path)$"), "Missing {a}."),
+    (re.compile(r"^campo (.+): obbligatorio$"), "Field {a} is required."),
+    (re.compile(r"^manca la chiave esterna di (.+)$"), "Missing external key for {a}."),
+    (re.compile(r"^manca (.+)$"), "Missing {a}."),
+    (re.compile(r"^scrittura (.+) HTTP (\d+): risposta vuota$"), "Write {a} HTTP {b}: empty response."),
     (re.compile(r"^token OAuth HTTP (\d+)$"), "OAuth token HTTP {a}."),
 )
 

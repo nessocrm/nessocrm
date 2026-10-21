@@ -4,7 +4,7 @@
 
 Manual of Nesso, in Italian and in English. What is done and what is not is in [00-progetto.md](00-progetto.md). A photograph of a production backup is not part of this repo.
 
-The application is a middleware. EspoCRM is on one side, an external system on the other. They talk only through this app. The Espo entity, the fields and the channel are not written in the code: they are configured. The code knows webhook, database read, CSV file, PDF on the customer and outbound HTTP and, for each of them, can create or update any entity that Espo exposes in its metadata.
+The application is a middleware. EspoCRM is on one side, an external system on the other. They talk only through this app. The Espo entity, the fields and the channel are not written in the code: they are configured. The code knows webhook, database read, CSV file, PDF on the customer, document and outbound HTTP and, for each of them, can create or update any entity that Espo exposes in its metadata.
 
 | Chapter | What is in it |
 |---|---|

@@ -208,7 +208,7 @@ Optional body `{"withDependencies": true}`. If it is true, the integration named
 
 ## POST /api/pipelines/{id}/dry
 
-Reads at most five rows and returns `rows`, each with `mapped` or `status: scartato`. It does not write to Espo. A missing lookup with the "create" policy appears as `nuovo:valore` and the record is not born. The webhook answers that it has no rows to read.
+Reads at most five rows and returns `rows`, each with `mapped` or `status: scartato`. It does not write to Espo. A missing lookup with the "create" policy appears as `nuovo:valore` and the record is not born. The webhook, without an example, answers that it has no rows to read. With `sample` it interprets the body and does not write.
 
 ## POST /api/pipelines/{id}/anteprima
 
@@ -313,6 +313,8 @@ Deletes queue, sink, cursor, rejects and the run journal of that id. It does not
 ## POST /hook/{id}/{token}
 
 Without `signSecret` on the connection the token in the address is enough. With the secret, the `X-Nesso-Firma` header must be the HMAC-SHA256 of the raw body. If it is missing or does not match, the answer is 401 and no run starts.
+
+`POST /api/pipelines/{id}/dry` without a body stays the dry run from before. With `sample` it interprets the webhook and does not write. `POST /api/scarti/{id}/ripeti` sends that row again. `POST /api/passaggio` downloads the configuration without secrets and without addresses; loading it stops and does not save. `POST /api/posta/prova` queues a test only when SMTP is set.
 
 Body, one record:
 

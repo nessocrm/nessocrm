@@ -29,6 +29,8 @@ The token is compared in constant time (`hmac.compare_digest`). Missing connecti
 
 If `signSecret` is set, the raw body must arrive with the `X-Nesso-Firma` header: HMAC-SHA256 in hexadecimal, also with the `sha256=` prefix. A missing or different signature: HTTP 401 "invalid signature", and no run starts. Without a secret the webhook from before keeps coming in. The secret does not appear in the download.
 
+The dry run, without an example, still answers that it has no rows. With a pasted example it shows the interpreted rows and does not write to Espo.
+
 If no inbound integration points at this id: HTTP 400 "no integration uses this connection". The body is not kept.
 
 For every active inbound integration, for every record, it calls inbound. A row that fails is written in `scarto` and the batch continues. An item that is not an object is a reject. At the end of the batch `mark_run` reports created, updated, unchanged and rejected. A paused integration does not receive the webhook.
@@ -41,7 +43,7 @@ In the trial the connection is `sito-web`, the integration is `richieste-del-sit
 
 Meant for an ERP or a jobs view, read by the engine.
 
-Fields required on save: `host`, `database`, `user`, `query`. A missing `engine` is `mysql`. A missing `port` becomes 3306 for MySQL and MariaDB, 5432 for Postgres, 1433 for SQL Server, 1521 for Oracle. `password` can be empty. On update, empty password and a previous password present: the previous one is kept. `tls` off does not change the previous MySQL connection. On, the connection asks for TLS. `tunnelHost`, if set, opens an SSH forward and the database is reached from there; the tunnel password does not enter the download. The engine does not write to the external database: the query stays a single SELECT.
+Fields required on save: `host`, `database`, `user`, `query`. A missing `engine` is `mysql`. A missing `port` becomes 3306 for MySQL and MariaDB, 5432 for Postgres, 1433 for SQL Server, 1521 for Oracle. `password` can be empty. On update, empty password and a previous password present: the previous one is kept. `tls` off does not change the previous MySQL connection. On, the connection asks for TLS. `tunnelHost`, if set, opens an SSH forward and the database is reached from there; the tunnel password does not enter the download. The query stays a single SELECT. Write-back, if the integration switches it on, is a separate UPDATE on the named fields. Off, the database is not touched.
 
 The query is refused if:
 
@@ -117,6 +119,10 @@ Inbound, it reads the `.csv` and `.xlsx` files in that folder, not the ones alre
 ## PDF on the customer
 
 The connection is `pdf`. The `*.pdf` files are dropped in `scambio/{id}`, not in subfolders. If the name contains a company's key, as a whole word, the file becomes a Document linked to that Account, in the document folder and the team written on the connection, and it moves to `elaborati/`. Between two keys the longer one wins: `C001` does not take `fattura-C0012.pdf`. A name without a key stays in the folder. This is not the general document channel: it is this gesture.
+
+## Document
+
+The connection is `documento`. The files in `scambio/{id}` become Espo Documents, in the folder and the team written on the connection, and then they move to `elaborati/`. Unlike the PDF, the name does not have to contain a company's key.
 
 ## Outbound HTTP
 

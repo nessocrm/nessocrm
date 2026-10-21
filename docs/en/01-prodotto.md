@@ -107,9 +107,9 @@ Universal, here, has a precise meaning.
 
 ## What this version keeps fixed
 
-- The channel types are webhook, database, CSV, Excel, SFTP, FTPS, PDF on the customer and outbound HTTP. The database is MySQL, MariaDB, Postgres, SQL Server or Oracle, read only. There is no queue. Outbound OAuth exists, as client credentials, and only if it is chosen on the connection.
+- The channel types are webhook, database, CSV, Excel, SFTP, FTPS, PDF on the customer, document and outbound HTTP. The database is MySQL, MariaDB, Postgres, SQL Server or Oracle. The read is a SELECT. Write-back is off until it is switched on, and then it touches only the named fields. There is no retry queue. Outbound OAuth exists, as client credentials, and only if it is chosen on the connection.
 - The database is read only with SELECT. Without TLS and without a tunnel, MySQL and MariaDB stay the connection from before.
-- The engine does not write on the source system.
+- On the source system the engine does not write, until write-back for that integration is switched on.
 - If Espo refuses a record because a similar one exists with another key, the row is rejected, unless the integration is set to update that record.
 - The cadence has four intervals: 0, 5, 15, 60 minutes. A fixed time can also be set, for example 02:10.
 - From the page an object that already exists is not edited. It is deleted and created again. The API, if it receives an existing id, updates it.

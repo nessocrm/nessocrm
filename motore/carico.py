@@ -1010,6 +1010,8 @@ def gesture_can(gesture: str, method: str, path: str) -> bool:
         return True
     if len(parts) == 4 and parts[:2] == ["api", "pipelines"] and parts[3] in ("run", "dry", "chiusure"):
         return True
+    if len(parts) == 4 and parts[:2] == ["api", "scarti"] and parts[3] == "ripeti":
+        return True
     if len(parts) == 4 and parts[:2] == ["api", "proposte"] and parts[3] in ("conferma", "lascia"):
         return True
     if (
@@ -1325,6 +1327,155 @@ def oauth_expired(obtained_at: str | None, expires_in: int, now: datetime, skew:
     if then is None or int(expires_in or 0) <= 0:
         return True
     return (now - then).total_seconds() >= int(expires_in) - skew
+
+
+def hook_records(body) -> list:
+    if isinstance(body, dict) and isinstance(body.get("records"), list):
+        return body["records"]
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        return [body]
+    raise RuntimeError("il corpo deve essere un oggetto o un elenco")
+
+
+def empty_required(mapping: list[dict], payload: dict) -> str:
+    for rule in mapping:
+        if rule.get("required") not in (True, 1, "1", "true", "si", "sì"):
+            continue
+        transform = str(rule.get("transform") or "copy")
+        if transform.startswith("const:"):
+            continue
+        raw = payload.get(rule.get("from"))
+        if raw is None or str(raw).strip() == "":
+            return str(rule.get("to") or rule.get("from") or "campo")
+    return ""
+
+
+def describe_espo_error(result) -> str:
+    if result in (None, "", [], {}):
+        return ""
+    field = ""
+    reason = ""
+    if isinstance(result, dict):
+        field = str(result.get("field") or result.get("attribute") or "")
+        reason = str(result.get("message") or result.get("messageTranslation") or "")
+    elif isinstance(result, list) and result and isinstance(result[0], dict):
+        field = str(result[0].get("field") or result[0].get("attribute") or "")
+        reason = str(result[0].get("message") or result[0].get("type") or "")
+    if field and reason:
+        return f"campo {field}: {reason}"
+    if field:
+        return f"campo {field}"
+    return ""
+
+
+def parent_ids(depends_on: str, raw) -> list[str]:
+    if isinstance(raw, list):
+        found = []
+        for item in raw:
+            name = str(item or "").strip()
+            if name and name not in found:
+                found.append(name)
+        return found
+    single = str(depends_on or "").strip()
+    return [single] if single else []
+
+
+def blocked_parent(enabled: int, last_status: str | None) -> bool:
+    return enabled == 0 or last_status == "errore"
+
+
+def link_choice(names: list[str], wanted: str) -> str:
+    chosen = str(wanted or "").strip()
+    if chosen:
+        if chosen in names or not names:
+            return chosen
+        return chosen
+    if len(names) == 1:
+        return names[0]
+    if len(names) > 1:
+        raise RuntimeError("indica il nome del collegamento")
+    return ""
+
+
+def place_names(columns: list[str], name: str, index: int | None) -> list[str]:
+    current = [item for item in columns if item != name]
+    if index is None or index < 0 or index >= len(current):
+        current.append(name)
+        return current
+    current.insert(index, name)
+    return current
+
+
+def wall_clock(value: str) -> str:
+    text = str(value or "").strip()
+    for pattern in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(text, pattern)
+        except ValueError:
+            continue
+        if pattern in ("%d/%m/%Y", "%Y-%m-%d"):
+            return parsed.strftime("%Y-%m-%d")
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+    return text
+
+
+def activity_opens(creating: bool, repeat: bool) -> bool:
+    return creating or repeat
+
+
+def note_line(name: str, key: str, when: str) -> str:
+    return f"{name}: {key} alle {when}"
+
+
+def write_back_sql(enabled: bool, table: str, key_column: str, columns: list[str], engine: str = "mysql") -> str | None:
+    if not enabled:
+        return None
+    ident = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    if not ident.match(table or "") or not ident.match(key_column or "") or not columns:
+        return None
+    if any(not ident.match(column) for column in columns):
+        return None
+    sets = ", ".join(quote_ident(column, engine) + " = ?" for column in columns)
+    return (
+        f"UPDATE {quote_ident(table, engine)} SET {sets} "
+        f"WHERE {quote_ident(key_column, engine)} = ?"
+    )
+
+
+def portal_visible(rule: dict | None, record: dict) -> bool:
+    if not rule or not rule.get("enabled"):
+        return True
+    entity = str(rule.get("entity") or "")
+    if entity and record.get("entity") != entity:
+        return False
+    team = str(rule.get("team") or "")
+    if team and team not in (record.get("teams") or []):
+        return False
+    return True
+
+
+def passaggio_holes(connections: list[dict]) -> list[str]:
+    holes = []
+    for item in connections:
+        if not isinstance(item, dict):
+            continue
+        config = item.get("config") or {}
+        kind = item.get("kind")
+        name = str(item.get("name") or item.get("id") or "collegamento")
+        if kind in ("database", "sftp", "ftps") and not str(config.get("host") or "").strip():
+            holes.append(name + ": indirizzo")
+        if kind == "http" and not str(config.get("url") or "").strip():
+            holes.append(name + ": indirizzo")
+        if kind in ("database", "sftp", "ftps", "http") and not config.get("hasPassword") and not str(config.get("password") or "").strip():
+            if kind != "http" or config.get("auth") in ("basic", "oauth"):
+                holes.append(name + ": password")
+    return holes
+
+
+def mail_ready(host: str) -> bool:
+    return bool(str(host or "").strip())
 
 
 def identity_preview(rows: list[dict], columns: list[str], limit: int = 3) -> list[str]:

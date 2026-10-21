@@ -11,7 +11,7 @@ Il menu è una barra a sinistra, larga 232 pixel, la stessa forma del menu later
 | `#/schede/nuova` | Crea una scheda. Si indicano il singolare e il plurale |
 | `#/schede/{nome}` | Campi della scheda e modulo per aggiungerne uno: etichetta, tipo, valori se è un elenco, obbligo |
 | `#/collegamenti` | Elenco dei canali, una scheda per collegamento |
-| `#/collegamenti/nuovo` | Modulo di un solo collegamento. Il tipo si sceglie con pulsanti radio e compaiono solo i campi di quel tipo. Il PDF sul cliente chiede cartella documenti e team, entrambi facoltativi |
+| `#/collegamenti/nuovo` | Modulo di un solo collegamento. Il tipo si sceglie con pulsanti radio e compaiono solo i campi di quel tipo. Il PDF sul cliente e il documento chiedono cartella documenti e team, entrambi facoltativi. Sull'HTTP in uscita c'è la consegna facoltativa della casella a un'altra integrazione |
 | `#/collegamenti/modifica/{id}` | Lo stesso modulo, già compilato. Una password vuota non cancella quella salvata |
 | `#/integrazioni` | Elenco delle integrazioni, con scheda, collegamento, cadenza ed esito. Da qui si esegue, si prova a secco, si modifica, si mette in pausa, si scarica e si carica la configurazione, e si scarica e si carica il foglio di abbinamento |
 | `#/consegna` | Pagina da stampare: indirizzi, integrazioni accese, orario, padrone di ogni campo, come si ferma la scrittura. Non ci sono password né token |
@@ -43,4 +43,4 @@ Sulla scheda Espo compare Origine Nesso: «aggiornato dal gestionale» con data 
 
 Sull'integrazione: anteprima del giro, modalità lettura, annullamento, conferma delle chiusure. In fondo alla pagina ci sono il piano di accensione e la finestra di silenzio. Il piano elenca fino a tre integrazioni già salvate: si conferma un gradino solo dopo la sua anteprima, e il successivo resta spento finché non lo si riattiva. La finestra ha due date e un motivo, per una integrazione o per tutte. Se un file è arrivato in quei giorni, la scheda dice che è in attesa e offre conferma o scarto. In Attività il riepilogo del giro, la coda da guardare e il giornale, compresa l'assenza del file.
 
-Sulla destinazione HTTP il modulo chiede l'autenticazione: nessuna, Bearer, utente e password, un'intestazione, oppure OAuth a credenziali client. Sul webhook il segreto della firma è facoltativo: vuoto, resta il token nell'indirizzo.
+Sulla destinazione HTTP il modulo chiede l'autenticazione: nessuna, Bearer, utente e password, un'intestazione, oppure OAuth a credenziali client. Sul webhook il segreto della firma è facoltativo: vuoto, resta il token nell'indirizzo. La prova a secco di un webhook ha una casella per incollare un esempio. In Attività una riga scartata ha «Ripeti». Sulla scheda, l'etichetta di un campo creato da Nesso si cambia e il nome tecnico resta.

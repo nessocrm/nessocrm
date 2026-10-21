@@ -82,8 +82,8 @@ The key is the one the lead entered with, not a new id calculated on the way out
 - HTTP 200 `{"stored": true}`
 - a `delivery` row, status `ricevuto`, detail "external system"
 
-Wrong token or id, or a kind other than `http`: HTTP 401 "inbox not valid". The body can be any JSON object. The inbox does not send it to Espo and does not validate it against a mapping. It is an observation point to try outbound without an external server, and an address an external system can call if it is given the token.
+Wrong token or id, or a kind other than `http`: HTTP 401 "inbox not valid". The body can be any JSON object. Without `deliverTo` the inbox does not send it to Espo. With `deliverTo` it delivers it once to that integration, if it is enabled; if it is paused, the row stays `ricevuto`. It is an observation point to try outbound without an external server, and an address an external system can call if it is given the token.
 
 ## What outbound does not do
 
-It does not delete in Espo. It does not send deletions. It does not follow relations. A run reads up to 1000 records, in pages of 50. The POST can carry Bearer, basic, a header or OAuth. A failed send does not move the cursor past the last POST that succeeded.
+It does not delete in Espo. It does not send deletions. It does not follow relations. A run reads up to 1000 records, in pages of 50. The POST can carry Bearer, basic, a header or OAuth. A link leaves as an Espo id. If the rule says `as: chiave`, the external key of the linked record leaves; if it is missing, the row is rejected and the id is not sent in its place. A failed send does not move the cursor past the last POST that succeeded.

@@ -82,8 +82,8 @@ La chiave è quella con cui il lead era entrato, non un id nuovo calcolato in us
 - HTTP 200 `{"stored": true}`
 - una riga `delivery` status `ricevuto`, dettaglio «sistema esterno»
 
-Token o id errati, o kind diverso da `http`: HTTP 401 «casella non valida». Il corpo può essere qualsiasi JSON oggetto. La casella non lo manda a Espo e non lo valida contro un abbinamento. È un punto di osservazione per provare l'uscita senza un server esterno, e un indirizzo che un sistema esterno può chiamare se gli si dà il token.
+Token o id errati, o kind diverso da `http`: HTTP 401 «casella non valida». Il corpo può essere qualsiasi JSON oggetto. Senza `deliverTo` la casella non lo manda a Espo. Con `deliverTo` lo consegna una volta a quell'integrazione, se è accesa; se è in pausa, la riga resta `ricevuto`. È un punto di osservazione per provare l'uscita senza un server esterno, e un indirizzo che un sistema esterno può chiamare se gli si dà il token.
 
 ## Che cosa l'uscita non fa
 
-Non cancella su Espo. Non manda gli eliminati. Non segue le relazioni. Un giro legge fino a 1000 record, a pagine da 50. Il POST può portare Bearer, basic, un'intestazione o OAuth. Un invio fallito non fa avanzare il cursore oltre l'ultimo POST riuscito.
+Non cancella su Espo. Non manda gli eliminati. Non segue le relazioni. Un giro legge fino a 1000 record, a pagine da 50. Il POST può portare Bearer, basic, un'intestazione o OAuth. Un collegamento esce come id Espo. Se la regola dice `as: chiave`, esce la chiave esterna del record collegato; se non c'è, la riga si scarta e l'id non parte al suo posto. Un invio fallito non fa avanzare il cursore oltre l'ultimo POST riuscito.

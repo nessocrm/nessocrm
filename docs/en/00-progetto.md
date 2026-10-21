@@ -21,7 +21,7 @@ A **connection** is the channel. An **integration** is the rule: which connectio
 | Channel | Direction | Behaviour already working |
 |---|---|---|
 | Webhook | into Espo | Address with a token. Body as an object, a list, or `{records:[]}`. If there is a secret, the body must carry the signature |
-| Database | into Espo | One SELECT on MySQL or MariaDB, read in pages of 200 until the end. The engine does not write on that database |
+| Database | into Espo | One SELECT on MySQL or MariaDB, read in pages of 200 until the end. Write-back is off until it is switched on |
 | CSV file | into Espo | Folder `scambio/{id}`, UTF-8, comma or semicolon. After the run the file goes to `elaborati/`, even if some row was rejected. If a required column is missing the file stays where it is |
 | HTTP | out of Espo | JSON POST toward an address, or toward the local inbox. Bearer, user and password, a header, or OAuth client credentials can be added |
 
@@ -45,7 +45,7 @@ The local instance is the public image `espocrm/espocrm:10.0`, installed empty. 
 - One run at a time. The second receives "a run is already in progress".
 - The external database password is in clear text in the SQLite file of the local volume.
 - The scheduler has not been watched for a full 15-minute cycle.
-- There are no automatic tests.
+- The command `py -3 -m unittest test_carico test_giro test_frasi`, run from `motore/`, covers the channels, the entity and the lookup without a production Espo.
 
 ## Archived
 
@@ -95,6 +95,10 @@ A file in the folder can be CSV or Excel. SFTP and FTPS read the same files and,
 
 A webhook without a signing secret stays on the address with the token. If the secret is set, the body must arrive with the `X-Nesso-Firma` header: HMAC-SHA256 of the body, in hexadecimal, also with the `sha256=` prefix. A missing or different signature: HTTP 401, and no run starts. Outbound HTTP keeps no authentication, Bearer, user and password, and a header. In addition, OAuth client credentials: the token is requested again when it has expired, then the JSON goes out as before. The secret, the client secret and the token do not enter the journal or the download. The tests are in the class `FirmaEOauth`.
 
+### Use and channels, 21 October 2026
+
+An integration can wait for several parents, in order. With a single parent the run is the one from before. Outbound, a link stays the Espo id, unless the rule asks for the external key: if it is missing, the row is rejected and an id is not sent in its place. The label of a field created by Nesso can be changed, the technical name cannot. If two links point at the same entity, the name is required; if one exists, it is reused. A new field stays at the bottom of the detail and the list, unless a position is chosen. An empty required field is rejected with its name, before Espo is called. Currency and time zone apply only when the rule names them: a time written out in full does not shift by a day. A linked activity is born on creation, not on every update. Every successful write leaves a note in the history with the integration and the key; if the note fails, the record stays. From the journal one rejected row is sent again, with the payload already kept. Espo's error, when it names a field, lands in the journal; when the body is empty, the journal says the response is empty. The webhook dry run accepts a pasted example and does not write. The move between trial and production strips secrets and addresses and does not save until they are reviewed. Every save of the mapping keeps the version. Write-back to the source is off: when it is on, the UPDATE touches only the named fields. A file can become a document in the chosen folder and team. The local inbox, when it points at an enabled integration, delivers once; when paused, it accumulates. Engine mail starts only when its own SMTP is set, it has a queue if the send fails, and it does not use Espo's mail. The tests are in the class `Evolutive`.
+
 ### Switch-on, 19 October 2026
 
 A plan orders integrations that are already saved. The next step can be turned back on only if the previous one was confirmed after its preview, and it does not turn on by itself. An integration outside the plan is paused and resumed as before. A quiet window, for one integration or for all of them, does not write on those days: the file stays where it is. When the window ends it does not start on its own: you confirm it, and then it writes, or you discard it into `scartati/` without touching Espo. With no windows and no plan the run is the one from before. The tests are in the class `FinestraEPiano` and in the runs `la finestra`, `dopo la finestra`, `scartare`, `il piano`.
@@ -138,35 +142,14 @@ An item stays here until it is in the engine. Those already closed are not repea
 
 ### Data and visibility
 
-- Several parents: "companies and sites first, then the address book". Today only one is named.
 - A retry queue with growing wait, for a silent outbound and for the row whose parent has not arrived yet.
-- Outbound, the link leaves as an external key, not as an Espo id.
-- Change the label of a field that was already created.
-- Several links toward the same entity, with the chosen name. If one exists, Nesso reuses it. If two exist, it stops or creates another without asking the name.
-- Layout: detail, list, kanban. Today the new field is appended at the end.
-- Required fields checked before the run, with the message on the field.
-- Currency and time zone on read. The Italian phone is already `+39`. The trial quotes are already in euro.
-- An activity born with the record: task, call, meeting, with date and assignee.
-- A note in the history, so you can see where the row came from.
-- Portal: a contact that enters from outside has a path.
+- Portal: a contact that enters from outside has a path. The visibility rule is there, and it stays off until it is switched on in Espo.
 
 ### Use
 
-- Repeat a single rejected row, without replaying the whole file.
-- An error with the field name.
-- Dry run of the webhook: paste an example. Today it answers that it has no rows.
-- Two environments, trial and production, and moving the configuration with the passwords typed by hand.
-- History of the rule: who changed the mapping, and going back to the previous version.
 - Secrets outside SQLite in clear text.
 - Several runs together, or at least one per channel. After an error the scheduler still waits the whole interval.
-- Automatic tests on the four channels, on the new entity and on the lookup.
-
-### Channels
-
-- Write-back on the source, off until it is switched on.
-- The document as a channel, with folder and visibility. The path of a local file can already be uploaded to a file field.
-- The local inbox delivers the JSON to another integration. Today it accumulates it and stops.
-- Engine mail, SMTP and IMAP, separate from Espo's: a notice, the day's summary, an outbound message composed from the fields, an inbound message that becomes a record. Its own credentials, a send test, a queue if the send fails.
+- Understand where a model helps to configure the mapping. The synonym proposal stays, and it does not save. The model, if there is one, does not write and does not see the passwords.
 
 ### In what order
 

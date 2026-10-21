@@ -491,6 +491,7 @@
             <label><input type="radio" name="kind" value="sftp" ${kind === "sftp" ? "checked" : ""}> SFTP. Il motore legge e deposita i file su un server.</label>
             <label><input type="radio" name="kind" value="ftps" ${kind === "ftps" ? "checked" : ""}> FTPS. Come SFTP, sul protocollo FTP con TLS.</label>
             <label><input type="radio" name="kind" value="pdf" ${kind === "pdf" ? "checked" : ""}> PDF sul cliente. Il nome del file contiene la chiave dell'azienda.</label>
+            <label><input type="radio" name="kind" value="documento" ${kind === "documento" ? "checked" : ""}> Documento. Il file diventa un documento nella cartella e nel team scelti.</label>
             <label><input type="radio" name="kind" value="http" ${kind === "http" ? "checked" : ""}> Destinazione HTTP. Espo manda i dati fuori.</label>
           </fieldset>
           <div id="db-fields" hidden>
@@ -548,6 +549,7 @@
             <label>Password della destinazione <input name="httpPassword" type="password" autocomplete="new-password" placeholder="${config.hasPassword ? "Lascia vuoto per non cambiarla" : ""}"></label>
             <label>Nome intestazione <input name="headerName" autocomplete="off" value="${esc(config.headerName || "")}"></label>
             <label>Valore intestazione <input name="headerValue" type="password" autocomplete="new-password" placeholder="${config.hasHeader ? "Lascia vuoto per non cambiarlo" : ""}"></label>
+            <label>Consegna alla integrazione, facoltativa <input name="deliverTo" autocomplete="off" value="${esc(config.deliverTo || "")}"><span class="hint">Se è vuota, la casella accumula e si ferma. Se l'integrazione è in pausa, accumula e non scarta.</span></label>
             <div id="oauth-fields" hidden>
               <label>Indirizzo del token <input name="tokenUrl" type="url" placeholder="https://" value="${esc(config.tokenUrl || "")}"></label>
               <label>Client id <input name="clientId" autocomplete="off" value="${esc(config.clientId || "")}"></label>
@@ -574,7 +576,7 @@
         document.querySelector("#db-fields").hidden = chosen !== "database";
         document.querySelector("#hook-fields").hidden = chosen !== "webhook";
         document.querySelector("#http-fields").hidden = chosen !== "http";
-        document.querySelector("#pdf-fields").hidden = chosen !== "pdf";
+        document.querySelector("#pdf-fields").hidden = chosen !== "pdf" && chosen !== "documento";
         document.querySelector("#file-fields").hidden = chosen !== "sftp" && chosen !== "ftps";
         const oauth = document.querySelector("#oauth-fields");
         if (oauth) oauth.hidden = chosen !== "http" || !form.auth || form.auth.value !== "oauth";
@@ -628,13 +630,14 @@
             password: form.httpPassword.value,
             headerName: form.headerName.value.trim(),
             headerValue: form.headerValue.value,
+            deliverTo: form.deliverTo.value.trim(),
             tokenUrl: form.tokenUrl.value.trim(),
             clientId: form.clientId.value.trim(),
             clientSecret: form.clientSecret.value,
             scope: form.scope.value.trim()
           };
         }
-        if (body.kind === "pdf") {
+        if (body.kind === "pdf" || body.kind === "documento") {
           body.config = { documentFolder: form.documentFolder.value.trim(), team: form.team.value.trim() };
         }
         const response = await fetch("/api/connections", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -791,6 +794,7 @@
             <div class="actions">
               <button type="button" data-run="${esc(item.id)}">Esegui ora</button>
               <button type="button" class="secondary" data-dry="${esc(item.id)}">Prova a secco</button>
+              ${link && link.kind === "webhook" ? `<label class="grow">Esempio del webhook<textarea data-sample="${esc(item.id)}" rows="3" placeholder='{"codice": "1"}'></textarea></label>` : ""}
               <button type="button" class="secondary" data-cambia data-preview="${esc(item.id)}">Anteprima del giro</button>
               <button type="button" class="secondary" data-cambia data-read="${esc(item.id)}" data-on="${item.read_only ? "1" : "0"}">${item.read_only ? "Esci dalla lettura" : "Modalità lettura"}</button>
               <button type="button" class="secondary" data-cambia data-undo="${esc(item.id)}">Annulla il giro</button>
@@ -864,7 +868,17 @@
     async function dry(id) {
       const box = main.querySelector(`[data-msg="${id}"]`);
       box.textContent = t("Prova in corso, senza scrivere su Espo.");
-      const response = await fetch("/api/pipelines/" + id + "/dry", { method: "POST" });
+      const sampleBox = main.querySelector(`[data-sample="${id}"]`);
+      let payload;
+      if (sampleBox && sampleBox.value.trim()) {
+        try {
+          payload = JSON.stringify({ sample: JSON.parse(sampleBox.value) });
+        } catch (error) {
+          box.textContent = t("il corpo deve essere un oggetto o un elenco");
+          return;
+        }
+      }
+      const response = await fetch("/api/pipelines/" + id + "/dry", { method: "POST", headers: payload ? { "Content-Type": "application/json" } : undefined, body: payload });
       const data = await response.json();
       if (!response.ok) {
         box.textContent = data.error || t("Prova non riuscita.");
@@ -1598,7 +1612,7 @@
       const inbound = (state.queue || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(item.external_id)}</td><td>${esc(phrases[item.detail] || item.detail || item.status)}</td><td>${esc(item.updated_at)}</td></tr>`);
       const outbound = (state.deliveries || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.connection_id || "")}</td><td>Uscita</td><td>${esc(phrases[item.status] || item.status)}${item.detail ? " — " + esc(item.detail) : ""}</td><td>${esc(item.created_at)}</td></tr>`);
       const rows = inbound.concat(outbound).join("") || `<tr><td colspan="4">Ancora nessun passaggio.</td></tr>`;
-      const rejected = (state.rejects || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(item.external_id || "")}</td><td>${esc(item.detail)}</td><td>${esc(item.created_at)}</td></tr>`).join("") || `<tr><td colspan="4">Nessuna riga scartata.</td></tr>`;
+      const rejected = (state.rejects || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(item.external_id || "")}</td><td>${esc(item.detail)}</td><td>${esc(item.created_at)} ${item.resolved ? "" : `<button type="button" data-replay="${item.id}">Ripeti</button>`}</td></tr>`).join("") || `<tr><td colspan="4">Nessuna riga scartata.</td></tr>`;
       const runs = (state.runs || []).map(item => `<tr><td>${esc(names[item.pipeline_id] || item.pipeline_id)}</td><td>${esc(phrases[item.status] || item.status)}</td><td>${esc(item.detail || "")}</td><td>${esc(item.created_at)}</td></tr>`).join("") || `<tr><td colspan="4">Nessun giro.</td></tr>`;
       shell("Attività", `
         <div class="page-header"><h1>Attività</h1></div>
@@ -1679,6 +1693,12 @@
         link.click();
         say(t("File pronto. I record restano dov'erano."));
       });
+      main.querySelectorAll("[data-replay]").forEach(button => button.addEventListener("click", async () => {
+        const response = await fetch("/api/scarti/" + button.dataset.replay + "/ripeti", { method: "POST" });
+        const data = await response.json();
+        say(response.ok ? t("Riga rilanciata.") : (data.error || t("Non sono riuscito a rilanciare.")));
+        if (response.ok) await refresh();
+      }));
     }
 
     function notFound() {
@@ -1827,6 +1847,12 @@
           <label class="radios"><span><input type="checkbox" name="required"> Campo obbligatorio</span></label>
           <div class="actions"><button type="submit">Aggiungi il campo</button></div>
         </form>
+        <form class="panel" id="label-form">
+          <h2>Etichetta di un campo di Nesso</h2>
+          <label>Nome tecnico<input name="technical" required placeholder="cCodice"></label>
+          <label>Nuova etichetta<input name="label" required maxlength="80"></label>
+          <div class="actions"><button type="submit">Cambia l'etichetta</button></div>
+        </form>
       `);
       const optionsLabel = document.querySelector("#options-label");
       const typeSelect = document.querySelector("#field-form select[name=type]");
@@ -1851,6 +1877,18 @@
         entity.fields.push({ name: data.name, label: form.label.value.trim(), type: form.type.value });
         entity.fields.sort((a, b) => a.label.localeCompare(b.label, "it"));
         render();
+      });
+      document.querySelector("#label-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const response = await fetch("/api/sheets/" + encodeURIComponent(entity.name) + "/fields/" + encodeURIComponent(form.technical.value.trim()), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label: form.label.value.trim() })
+        });
+        const data = await response.json();
+        if (!response.ok) return showError(data.error || t("Non sono riuscito a cambiare l'etichetta."));
+        say(t("Etichetta aggiornata. Il nome tecnico resta."));
       });
     }
 

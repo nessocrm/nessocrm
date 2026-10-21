@@ -21,7 +21,7 @@ Un **collegamento** è il canale. Un'**integrazione** è la regola: quale colleg
 | Canale | Verso | Comportamento già in funzione |
 |---|---|---|
 | Webhook | entra in Espo | Indirizzo con token. Corpo oggetto, elenco, oppure `{records:[]}`. Se c'è un segreto, il corpo deve portare la firma |
-| Database | entra in Espo | Una SELECT su MySQL o MariaDB, letta a pagine da 200 fino in fondo. Il motore non scrive su quel database |
+| Database | entra in Espo | Una SELECT su MySQL o MariaDB, letta a pagine da 200 fino in fondo. La scrittura di ritorno è spenta finché non si accende |
 | File CSV | entra in Espo | Cartella `scambio/{id}`, UTF-8, virgola o punto e virgola. Dopo il giro il file va in `elaborati/`, anche se qualche riga è scartata. Se manca una colonna obbligatoria il file resta dov'è |
 | HTTP | esce da Espo | POST JSON verso un indirizzo, oppure verso la casella locale. Si può aggiungere Bearer, utente e password, un'intestazione, oppure OAuth a credenziali client |
 
@@ -45,7 +45,7 @@ L'istanza locale è l'immagine pubblica `espocrm/espocrm:10.0`, installata vuota
 - Gira una esecuzione alla volta. La seconda riceve «un'esecuzione è già in corso».
 - La password del database esterno è in chiaro nel file SQLite del volume locale.
 - Il pianificatore non è stato osservato per un ciclo intero da 15 minuti.
-- Non ci sono test automatici.
+- Il comando `py -3 -m unittest test_carico test_giro test_frasi`, lanciato da `motore/`, copre i canali, la scheda e il lookup senza un Espo di produzione.
 
 ## Archiviate
 
@@ -95,6 +95,10 @@ Il file in cartella può essere CSV o Excel. SFTP e FTPS leggono gli stessi file
 
 Un webhook senza segreto di firma resta sull'indirizzo con il token. Se il segreto c'è, il corpo deve arrivare con l'intestazione `X-Nesso-Firma`: HMAC-SHA256 del corpo, in esadecimale, anche con il prefisso `sha256=`. Firma assente o diversa: HTTP 401, e non nasce un giro. L'uscita HTTP tiene nessuna autenticazione, Bearer, utente e password, e un'intestazione. In più OAuth a credenziali client: il token si chiede di nuovo quando è scaduto, poi il JSON esce come prima. Segreto, client secret e token non entrano nel giornale né nello scarico. I test sono nella classe `FirmaEOauth`.
 
+### Uso e canali, 21 ottobre 2026
+
+Un'integrazione può aspettare più padri, in ordine. Con un padre solo il giro è quello di prima. In uscita un collegamento resta l'id Espo, salvo che la regola chieda la chiave esterna: se manca, la riga si scarta e non parte un id al suo posto. L'etichetta di un campo creato da Nesso si cambia, il nome tecnico no. Se verso una scheda ci sono due collegamenti, si indica il nome; se ne esiste uno, si riusa. Un campo nuovo resta in fondo a dettaglio ed elenco, salvo una posizione scelta. Un campo obbligatorio vuoto si scarta col suo nome, prima di chiamare Espo. Valuta e fuso si applicano solo se la regola li indica: un orario scritto per esteso non slitta di un giorno. Un'attività collegata nasce alla creazione, non a ogni aggiornamento. Ogni scrittura riuscita lascia una nota nello storico con integrazione e chiave; se la nota non riesce, il record resta. Dal giornale si rilancia una riga scartata, col payload già conservato. L'errore di Espo, se nomina un campo, finisce nel giornale; se il corpo è vuoto, si dice che la risposta è vuota. La prova a secco del webhook accetta un esempio incollato e non scrive. Il passaggio fra prova e esercizio toglie segreti e indirizzi e non salva finché non si rivedono. Ogni salvataggio dell'abbinamento tiene la versione. La scrittura di ritorno sulla sorgente è spenta: accesa, l'UPDATE tocca solo i campi indicati. Un file può diventare un documento nella cartella e nel team scelti. La casella locale, se punta a un'integrazione accesa, consegna una volta; in pausa accumula. La posta del motore parte solo se c'è un SMTP proprio, ha una coda se l'invio fallisce, e non usa la posta di Espo. I test sono nella classe `Evolutive`.
+
 ### Accensione, 19 ottobre 2026
 
 Un piano ordina integrazioni già salvate. Il gradino successivo si riattiva solo se il precedente è stato confermato dopo la sua anteprima, e non si accende da solo. Un'integrazione fuori dal piano si mette in pausa e si riattiva come prima. Una finestra di silenzio, per una integrazione o per tutte, non scrive in quei giorni: il file resta dov'è. Finita la finestra non parte da solo: si conferma, e allora scrive, oppure si scarta in `scartati/` senza toccare Espo. Senza finestre e senza piano il giro è quello di prima. I test sono nelle classi `FinestraEPiano` e nei giri `la finestra`, `dopo la finestra`, `scartare`, `il piano`.
@@ -138,35 +142,14 @@ Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. 
 
 ### Dati e visibilità
 
-- Più padri: «prima le aziende e le sedi, poi la rubrica». Oggi se ne indica uno solo.
 - Coda di ritento con attesa crescente, per l'uscita muta e per la riga il cui padre non è ancora arrivato.
-- In uscita il collegamento parte come chiave esterna, non come id Espo.
-- Cambiare l'etichetta di un campo già creato.
-- Più collegamenti verso la stessa scheda, con il nome scelto. Se ne esiste uno, Nesso lo riusa. Se ne esistono due, si blocca o ne crea un altro senza chiedere il nome.
-- Layout: dettaglio, elenco, kanban. Oggi il campo nuovo viene appeso in fondo.
-- Obbligatori controllati prima del giro, con il messaggio sul campo.
-- Valuta e fuso in lettura. Il telefono italiano è già `+39`. Le offerte della prova sono già in euro.
-- Attività nata insieme al record: compito, chiamata, riunione, con data e assegnatario.
-- Nota nello storico, così si vede da dove è arrivata la riga.
-- Portale: un contatto che entra da fuori ha un percorso.
+- Portale: un contatto che entra da fuori ha un percorso. La regola di visibilità c'è, e resta spenta finché non la si accende su Espo.
 
 ### Uso
 
-- Ripetere una sola riga scartata, senza rilanciare tutto il file.
-- Errore col nome del campo.
-- Prova a secco del webhook: incollare un esempio. Oggi risponde che non ha righe.
-- Due ambienti, prova e esercizio, e il passaggio della configurazione con le password messe a mano.
-- Storia della regola: chi ha cambiato l'abbinamento, e tornare alla versione di prima.
 - Segreti fuori dal SQLite in chiaro.
 - Più esecuzioni insieme, o almeno una per canale. Dopo un errore il pianificatore aspetta ancora l'intervallo intero.
-- Test automatici sui quattro canali, sulla scheda nuova e sul lookup.
-
-### Canali
-
-- Scrittura di ritorno sulla sorgente, spenta finché non si accende.
-- Il documento come canale, con cartella e visibilità. Il percorso di un file locale si può già caricare su un campo file.
-- La casella locale consegna il JSON a un'altra integrazione. Oggi lo accumula e si ferma.
-- Posta del motore, SMTP e IMAP, separata da quella di Espo: avviso, riepilogo della giornata, messaggio in uscita composto dai campi, messaggio in ingresso che diventa un record. Credenziali proprie, prova di invio, coda se l'invio fallisce.
+- Capire dove un modello aiuta a configurare l'abbinamento. La proposta per sinonimi resta, e non salva. Il modello, se c'è, non scrive e non vede le password.
 
 ### In che ordine
 

@@ -611,5 +611,29 @@ class FirmaEOauth(unittest.TestCase):
         self.assertTrue(carico.oauth_expired("2026-10-21 09:00:00", 3600, now))
 
 
+class Evolutive(unittest.TestCase):
+    def test_le_regole_nuove_non_cambiano_il_caso_singolo(self):
+        self.assertEqual(carico.link_choice(["account"], ""), "account")
+        with self.assertRaises(RuntimeError):
+            carico.link_choice(["cliente", "sede"], "")
+        self.assertEqual(carico.link_choice(["cliente", "sede"], "sede"), "sede")
+        self.assertEqual(carico.wall_clock("21/10/2026 00:30"), "2026-10-21 00:30:00")
+        self.assertIsNone(carico.write_back_sql(False, "clienti", "codice", ["note"]))
+        sql = carico.write_back_sql(True, "clienti", "codice", ["note"])
+        self.assertIn("`note`", sql)
+        self.assertNotIn("nome", sql)
+        self.assertEqual(carico.parent_ids("aziende", None), ["aziende"])
+        self.assertFalse(carico.activity_opens(False, False))
+        self.assertTrue(carico.activity_opens(True, False))
+        self.assertTrue(carico.portal_visible({"enabled": True, "entity": "Account", "team": "Vendite"}, {"entity": "Account", "teams": ["Vendite"]}))
+        self.assertFalse(carico.portal_visible({"enabled": True, "entity": "Account", "team": "Vendite"}, {"entity": "Account", "teams": ["Acquisti"]}))
+        self.assertEqual(carico.place_names(["name", "city"], "code", 1), ["name", "code", "city"])
+        self.assertEqual(carico.empty_required([{"from": "nome", "to": "name", "required": True}], {"nome": ""}), "name")
+        self.assertEqual(carico.empty_required([{"from": "nome", "to": "name"}], {"nome": ""}), "")
+        self.assertEqual(carico.describe_espo_error({"field": "name", "message": "non ammesso"}), "campo name: non ammesso")
+        self.assertEqual(carico.describe_espo_error(""), "")
+        self.assertIn("password", carico.passaggio_holes([{"name": "Db", "kind": "database", "config": {}}])[1])
+
+
 if __name__ == "__main__":
     unittest.main()

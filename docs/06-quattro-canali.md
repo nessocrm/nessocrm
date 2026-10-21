@@ -29,6 +29,8 @@ Il token è confrontato in tempo costante (`hmac.compare_digest`). Collegamento 
 
 Se `signSecret` è valorizzato, il corpo grezzo deve arrivare con l'intestazione `X-Nesso-Firma`: HMAC-SHA256 in esadecimale, anche con il prefisso `sha256=`. Firma assente o diversa: HTTP 401 «firma non valida», e non nasce un giro. Senza segreto il webhook di prima continua a entrare. Il segreto non compare nello scarico.
 
+La prova a secco, senza esempio, risponde ancora che non ha righe. Con un esempio incollato mostra le righe interpretate e non scrive su Espo.
+
 Se nessuna integrazione in ingresso punta a questo id: HTTP 400 «nessuna integrazione usa questo collegamento». Il corpo non viene conservato.
 
 Per ogni integrazione in ingresso attiva, per ogni record, chiama l'ingresso. Una riga che fallisce viene scritta in `scarto` e il lotto continua. Un elemento che non è un oggetto è uno scarto. A fine lotto `mark_run` riporta create, aggiornate, invariate e scartate. Un'integrazione in pausa non riceve il webhook.
@@ -41,7 +43,7 @@ Nella prova il collegamento è `sito-web`, l'integrazione è `richieste-del-sito
 
 Pensato per un gestionale o una vista di commesse, letti dal motore.
 
-Campi richiesti al salvataggio: `host`, `database`, `user`, `query`. `engine` mancante è `mysql`. `port` mancante diventa 3306 per MySQL e MariaDB, 5432 per Postgres, 1433 per SQL Server, 1521 per Oracle. `password` può essere vuota. In aggiornamento, password vuota e password precedente presente: si tiene la precedente. `tls` spento non cambia la connessione MySQL di prima. Acceso, la connessione chiede TLS. `tunnelHost`, se c'è, apre un inoltro SSH e il database si raggiunge da lì; la password del tunnel non entra nello scarico. Il motore non scrive sul database esterno: la query resta una sola SELECT.
+Campi richiesti al salvataggio: `host`, `database`, `user`, `query`. `engine` mancante è `mysql`. `port` mancante diventa 3306 per MySQL e MariaDB, 5432 per Postgres, 1433 per SQL Server, 1521 per Oracle. `password` può essere vuota. In aggiornamento, password vuota e password precedente presente: si tiene la precedente. `tls` spento non cambia la connessione MySQL di prima. Acceso, la connessione chiede TLS. `tunnelHost`, se c'è, apre un inoltro SSH e il database si raggiunge da lì; la password del tunnel non entra nello scarico. La query resta una sola SELECT. La scrittura di ritorno, se l'integrazione la accende, è un UPDATE a parte sui campi indicati. Spenta, il database non viene toccato.
 
 La query è rifiutata se:
 
@@ -117,6 +119,10 @@ In ingresso si leggono i `.csv` e i `.xlsx` in quella cartella, non quelli già 
 ## PDF sul cliente
 
 Il collegamento è `pdf`. I file `*.pdf` si depositano in `scambio/{id}`, non nelle sottocartelle. Se il nome contiene la chiave di un'azienda, come parola intera, il file diventa un Document collegato a quell'Account, nella cartella documenti e nel team scritti sul collegamento, e si sposta in `elaborati/`. Fra due chiavi vince la più lunga: `C001` non prende `fattura-C0012.pdf`. Un nome senza chiave resta in cartella. Non è il canale documenti generale: è questo gesto.
+
+## Documento
+
+Il collegamento è `documento`. I file in `scambio/{id}` diventano Document di Espo, nella cartella e nel team scritti sul collegamento, e poi si spostano in `elaborati/`. A differenza del PDF, il nome non deve contenere la chiave di un'azienda.
 
 ## HTTP in uscita
 
