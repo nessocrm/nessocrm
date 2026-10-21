@@ -356,7 +356,9 @@ Un solo oggetto, la pipeline deve essere in ingresso. Stessa risposta di un elem
 
 ## POST /api/pull/{id}
 
-Stessa risposta di pull, senza invio e senza aggiornare `last_run`. È il percorso di `uscita-lead` e di `contatti-da-espo`.
+Stessa risposta di pull, senza invio e senza aggiornare `last_run`. Se manca una chiave esterna la risposta ha `stopped` e i record dopo non ci sono. È il percorso di `uscita-lead` e di `contatti-da-espo`.
+
+`POST /api/proponi/modello` completa solo le colonne ancora vuote, e solo con campi già sulla scheda. Senza l'impostazione `model_url` risponde `model: false` e non chiama nessuno. L'indirizzo non entra nello scarico. Non salva l'integrazione.
 
 ## DELETE e POST su percorsi sbagliati
 

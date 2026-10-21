@@ -573,6 +573,51 @@ def _cell_reading(value: str) -> str:
         return value
 
 
+def complete_empty(rows: list[dict], suggestions: list, fields: list[dict] | None) -> list[dict]:
+    known = {str(field.get("name") or "") for field in fields or [] if field.get("name")}
+    by_from = {}
+    for item in suggestions or []:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("from") or "").strip()
+        target = str(item.get("to") or "").strip()
+        if source and target in known:
+            by_from.setdefault(source, target)
+    done = []
+    for row in rows:
+        item = dict(row)
+        if not item.get("to") and item.get("role") != "identity":
+            target = by_from.get(str(item.get("from") or ""))
+            if target:
+                item["to"] = target
+                item["known"] = True
+        done.append(item)
+    return done
+
+
+def model_request(columns: list[str], samples: list | None, fields: list[dict] | None, lingua: str) -> dict:
+    preview = []
+    for column in columns:
+        cells = []
+        for sample in samples or []:
+            if not isinstance(sample, dict):
+                continue
+            value = str(sample.get(column) or "").strip()
+            if not value:
+                continue
+            cells.append(value[:80])
+            if len(cells) == 3:
+                break
+        preview.append({"from": str(column), "cells": cells})
+    known = []
+    for field in fields or []:
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+        known.append({"name": name, "label": str(field.get("label") or name)[:80]})
+    return {"lingua": "en" if lingua == "en" else "it", "columns": preview, "fields": known}
+
+
 def propose(
     columns: list[str],
     lingua: str = "it",

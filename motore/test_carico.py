@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import datetime
 
@@ -633,6 +634,24 @@ class Evolutive(unittest.TestCase):
         self.assertEqual(carico.describe_espo_error({"field": "name", "message": "non ammesso"}), "campo name: non ammesso")
         self.assertEqual(carico.describe_espo_error(""), "")
         self.assertIn("password", carico.passaggio_holes([{"name": "Db", "kind": "database", "config": {}}])[1])
+        rows = carico.propose(["nome", "codice_strano"], "it", [{"name": "name", "label": "Nome"}])
+        filled = carico.complete_empty(rows, [
+            {"from": "codice_strano", "to": "name"},
+            {"from": "nome", "to": "inventato"},
+            {"from": "altro", "to": "name"},
+        ], [{"name": "name", "label": "Nome"}])
+        by_from = {row["from"]: row["to"] for row in filled}
+        self.assertEqual(by_from["codice_strano"], "name")
+        self.assertNotEqual(by_from["nome"], "inventato")
+        asked = carico.model_request(
+            ["codice_strano"],
+            [{"codice_strano": "C1", "password": "segreto"}, {"codice_strano": "C2"}, {"codice_strano": "C3"}, {"codice_strano": "C4"}],
+            [{"name": "name", "label": "Nome"}],
+            "it",
+        )
+        self.assertEqual(len(asked["columns"][0]["cells"]), 3)
+        self.assertNotIn("segreto", json.dumps(asked))
+        self.assertNotIn("password", json.dumps(asked))
 
 
 if __name__ == "__main__":

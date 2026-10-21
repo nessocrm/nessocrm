@@ -356,7 +356,9 @@ A single object, the pipeline must be inbound. Same response as one item of `res
 
 ## POST /api/pull/{id}
 
-Same response as pull, without sending and without updating `last_run`. It is the path of `uscita-lead` and of `contatti-da-espo`.
+Same response as pull, without sending and without updating `last_run`. If an external key is missing the response has `stopped` and the records after that are not there. It is the path of `uscita-lead` and of `contatti-da-espo`.
+
+`POST /api/proponi/modello` fills only the columns that are still empty, and only with fields already on the entity. Without the `model_url` setting it answers `model: false` and calls nobody. The address does not enter the download. It does not save the integration.
 
 ## DELETE and POST on the wrong paths
 

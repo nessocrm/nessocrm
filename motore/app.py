@@ -452,16 +452,20 @@ def bare_entity(name: str) -> str:
     return name
 
 
-def ensure_field(entity: str, name: str, label: str, length: int) -> str:
+def ensure_field(entity: str, name: str, label: str, length: int, kind: str = "varchar", options: list | None = None) -> str:
+    chosen = kind if kind in FIELD_TYPES else "varchar"
+    payload: dict = {"name": name, "type": chosen, "label": label}
+    if chosen == "varchar":
+        payload["maxLength"] = length
+    if chosen == "enum":
+        clean = [str(item).strip() for item in (options or []) if str(item).strip()]
+        if not clean:
+            raise RuntimeError("un elenco ha almeno un valore")
+        payload["options"] = clean[:50]
     status, result = espo_request(
         "POST",
         f"/api/v1/Admin/fieldManager/{entity}",
-        {
-            "name": name,
-            "type": "varchar",
-            "label": label,
-            "maxLength": length,
-        },
+        payload,
     )
     actual = publish_field_name(entity, name)
     if status in (200, 201):
@@ -1469,6 +1473,36 @@ def remember_sink(pipeline_id: str, espo_id: str, payload: dict) -> None:
         )
 
 
+def ask_model(url: str, payload: dict) -> list:
+    clean = str(url or "").strip()
+    if not clean.startswith("http://") and not clean.startswith("https://"):
+        return []
+    raw = json.dumps(payload, ensure_ascii=False).encode()
+    request = urllib.request.Request(clean, data=raw, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            body = json.loads(response.read().decode())
+    except Exception:
+        return []
+    if isinstance(body, dict):
+        body = body.get("rows") or body.get("suggestions") or []
+    if not isinstance(body, list):
+        return []
+    return [item for item in body if isinstance(item, dict)]
+
+
+def complete_with_model(body: dict) -> dict:
+    columns = list(body.get("columns") or [])
+    fields = list(body.get("fields") or [])
+    samples = list(body.get("samples") or [])
+    rows = carico.propose(columns, frasi.lingua_corrente(), fields, samples)
+    url = setting_value("model_url")
+    if not str(url or "").strip():
+        return {"rows": rows, "model": False}
+    suggestions = ask_model(url, carico.model_request(columns, samples, fields, frasi.lingua_corrente()))
+    return {"rows": carico.complete_empty(rows, suggestions, fields), "model": True}
+
+
 def remember_outbound_cursor(pipeline_id: str, item: dict) -> bool:
     stamp = item.get("modifiedAt") or ""
     espo_id = item.get("espoId") or ""
@@ -1480,21 +1514,28 @@ def remember_outbound_cursor(pipeline_id: str, item: dict) -> bool:
 
 def pull(pipeline_id: str) -> dict:
     records = outbound_rows(pipeline_id)
+    delivered = []
     last = None
+    stopped = ""
     for item in records:
         if item.get("missingKey"):
-            continue
+            stopped = str(item["missingKey"])
+            break
         remember_sink(pipeline_id, item["espoId"], item["payload"])
+        delivered.append(item)
         if item.get("espoId") or item.get("modifiedAt"):
             last = item
     missing_date = remember_outbound_cursor(pipeline_id, last) if last else False
     cursor = join_cursor(last["modifiedAt"], last["espoId"]) if last else load_cursor(pipeline_id)
-    return {
-        "exported": len(records),
+    result = {
+        "exported": len(delivered),
         "cursor": cursor,
         "missingDate": missing_date,
-        "records": [item["payload"] for item in records if not item.get("missingKey")],
+        "records": [item["payload"] for item in delivered],
     }
+    if stopped:
+        result["stopped"] = stopped
+    return result
 
 
 def source_rows_of(pipeline: sqlite3.Row, link: sqlite3.Row | None) -> list[dict] | None:
@@ -2321,7 +2362,9 @@ def compile_rules(entity: str, rules: list, creating: bool, back_label: str | No
             raise RuntimeError("questo collegamento va indicato come collegamento a più record, o come attività")
         if creating and (target not in by_name or by_name[target].get("type") == "link"):
             requested = camel_name(target)
-            actual = ensure_field(entity, requested, target, 180)
+            kind = str(rule.get("fieldType") or "varchar").strip()
+            raw_options = rule.get("options") if isinstance(rule.get("options"), list) else None
+            actual = ensure_field(entity, requested, target, 180, kind, raw_options)
             compiled.append({"from": source, "to": actual, "transform": "copy"})
             layout_names.append(actual)
             continue
@@ -5526,6 +5569,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/piani":
                 self.send_json(200, save_plan(self.read_json()))
+                return
+            if path == "/api/proponi/modello":
+                self.send_json(200, complete_with_model(self.read_json()))
                 return
             if path == "/api/proponi":
                 body = self.read_json()

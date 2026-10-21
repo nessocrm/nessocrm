@@ -56,6 +56,19 @@ class Giro(unittest.TestCase):
         row["last_run"] = "2026-10-19 02:12:00"
         self.assertFalse(app.pipeline_due(row, moment))
 
+    def test_quindici_minuti_partono_una_volta(self):
+        row = Row(enabled=1, schedule_minutes=15, last_run="2026-10-21 08:00:00")
+        almost = datetime(2026, 10, 21, 8, 14, 59).timestamp()
+        due = datetime(2026, 10, 21, 8, 15, 0).timestamp()
+        self.assertFalse(app.pipeline_due(row, almost))
+        self.assertTrue(app.pipeline_due(row, due))
+        row["last_run"] = "2026-10-21 08:15:00"
+        self.assertFalse(app.pipeline_due(row, due))
+        five = Row(enabled=1, schedule_minutes=5, last_run="2026-10-21 08:00:00")
+        self.assertTrue(app.pipeline_due(five, datetime(2026, 10, 21, 8, 5, 0).timestamp()))
+        hour = Row(enabled=1, schedule_minutes=60, last_run="2026-10-21 08:00:00")
+        self.assertFalse(app.pipeline_due(hour, due))
+
     def test_il_file_senza_colonna_non_si_sposta(self):
         folder = app.SCAMBIO / "anagrafiche"
         folder.mkdir(parents=True)
@@ -1030,10 +1043,14 @@ class Evolutive(unittest.TestCase):
         with app.connect() as conn:
             for table in ("pipeline", "connection", "queue_item", "scarto", "delivery", "run_log", "cursor_state", "sink_item", "chiave", "mapping_version", "mail_queue", "sheet_field"):
                 conn.execute(f"DELETE FROM {table}")
-        self.saved = (app.espo_request, app.espo_page, app.post_json, app.read_database, app.write_source, app.send_smtp)
+        self.saved = (app.espo_request, app.espo_page, app.post_json, app.read_database, app.write_source, app.send_smtp, app.ask_model)
+        with app.connect() as conn:
+            conn.execute("DELETE FROM setting WHERE key = 'model_url'")
 
     def tearDown(self):
-        app.espo_request, app.espo_page, app.post_json, app.read_database, app.write_source, app.send_smtp = self.saved
+        app.espo_request, app.espo_page, app.post_json, app.read_database, app.write_source, app.send_smtp, app.ask_model = self.saved
+        app.CATALOG["data"] = None
+        app.CATALOG["at"] = 0
 
     def _account(self, pipeline_id, mapping, **extra):
         with app.connect() as conn:
@@ -1269,6 +1286,130 @@ class Evolutive(unittest.TestCase):
         self.assertEqual(first["status"], "creato")
         self.assertEqual(second["status"], "aggiornato")
         self.assertEqual(sum(1 for path in posts if str(path).endswith("/Task")), 1)
+
+    def test_il_pull_si_ferma_sulla_chiave_mancante(self):
+        rows = [
+            {"id": "a1", "modifiedAt": "2026-10-21 09:00:00", "accountId": "known"},
+            {"id": "a2", "modifiedAt": "2026-10-21 09:05:00", "accountId": "missing"},
+            {"id": "a3", "modifiedAt": "2026-10-21 09:06:00", "accountId": "known"},
+        ]
+        app.espo_page = lambda *args, **kwargs: rows
+        with app.connect() as conn:
+            conn.execute("INSERT INTO chiave (entity, external_key, espo_id) VALUES ('Account', 'anagrafiche:C001', 'known')")
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field)
+                VALUES ('uscita-chiave', 'Uscita', 'out', 'Account', 'id', '', ?, 'cExternalKey')
+                """,
+                ('[{"from":"accountId","to":"cliente","transform":"copy","as":"chiave","lookupEntity":"Account"}]',),
+            )
+        pulled = app.pull("uscita-chiave")
+        self.assertEqual(pulled["exported"], 1)
+        self.assertEqual(pulled["records"], [{"cliente": "anagrafiche:C001"}])
+        self.assertEqual(pulled["stopped"], "cliente")
+        self.assertTrue(pulled["cursor"].endswith("a1"))
+        self.assertNotIn("a3", pulled["cursor"])
+        with app.connect() as conn:
+            sinks = conn.execute("SELECT espo_id FROM sink_item WHERE pipeline_id = 'uscita-chiave'").fetchall()
+        self.assertEqual([row["espo_id"] for row in sinks], ["a1"])
+
+    def test_un_post_fallito_non_supera_il_record(self):
+        rows = [
+            {"id": "a1", "modifiedAt": "2026-10-21 09:00:00", "name": "Uno"},
+            {"id": "a2", "modifiedAt": "2026-10-21 09:01:00", "name": "Due"},
+        ]
+        app.espo_page = lambda *args, **kwargs: rows
+        sent = []
+
+        def post(url, payload, headers=None):
+            sent.append(payload)
+            if len(sent) == 2:
+                raise RuntimeError("muto")
+
+        app.post_json = post
+        with app.connect() as conn:
+            conn.execute("INSERT INTO connection (id, name, kind, config_json, token) VALUES ('dest', 'Dest', 'http', ?, 'tok')", ('{"url":"https://example.test/in"}',))
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field, connection_id)
+                VALUES ('uscita-http', 'Uscita', 'out', 'Lead', 'id', '', ?, 'cExternalKey', 'dest')
+                """,
+                ('[{"from":"name","to":"nome","transform":"copy"}]',),
+            )
+        app.execute_pipeline("uscita-http")
+        self.assertEqual(len(sent), 2)
+        with app.connect() as conn:
+            cursor = conn.execute("SELECT cursor_value FROM cursor_state WHERE pipeline_id = 'uscita-http'").fetchone()["cursor_value"]
+        self.assertTrue(cursor.endswith("a1"))
+        self.assertNotIn("a2", cursor)
+
+    def test_il_campo_nuovo_prende_il_tipo_scelto(self):
+        posts = []
+
+        def fake(method, path, body=None, query=None):
+            if method == "POST" and "fieldManager" in str(path):
+                posts.append(body)
+                return 201, {"name": body["name"]}
+            if method == "PUT":
+                return 200, {}
+            return 200, []
+
+        app.espo_request = fake
+        app.CATALOG["at"] = datetime.now().timestamp()
+        app.CATALOG["data"] = [{
+            "name": "Account",
+            "label": "Azienda",
+            "keyField": "cExternalKey",
+            "fields": [{"name": "name", "type": "varchar", "label": "Nome"}],
+        }]
+        app.compile_rules("Account", [
+            {"from": "ragione", "to": "name", "role": "field"},
+            {"from": "inizio", "to": "Inizio", "role": "field", "fieldType": "date"},
+        ], True)
+        app.ensure_field("Account", "externalKey", "Chiave esterna", 180)
+        kinds = {item["name"]: item["type"] for item in posts}
+        self.assertEqual(kinds["inizio"], "date")
+        self.assertEqual(kinds["externalKey"], "varchar")
+        self.assertNotIn("name", kinds)
+        with self.assertRaises(RuntimeError):
+            app.ensure_field("Account", "fase", "Fase", 180, "enum", [])
+
+    def test_senza_modello_non_parte_nessuna_chiamata(self):
+        def boom(url, payload):
+            raise AssertionError(url)
+
+        app.ask_model = boom
+        result = app.complete_with_model({
+            "columns": ["codice_strano"],
+            "fields": [{"name": "name", "label": "Nome"}],
+            "samples": [{"codice_strano": "C001", "password": "segreto"}],
+        })
+        self.assertFalse(result["model"])
+        self.assertEqual(result["rows"][0]["to"], "")
+        app.set_setting("model_url", "https://modello.test/segreto-modello")
+        seen = {}
+
+        def fake(url, payload):
+            seen["payload"] = payload
+            return [
+                {"from": "codice_strano", "to": "name"},
+                {"from": "nome", "to": "inventato"},
+            ]
+
+        app.ask_model = fake
+        filled = app.complete_with_model({
+            "columns": ["nome", "codice_strano"],
+            "fields": [{"name": "name", "label": "Nome"}],
+            "samples": [{"nome": "Nord", "codice_strano": "C9", "password": "segreto"}],
+        })
+        self.assertTrue(filled["model"])
+        by_from = {row["from"]: row["to"] for row in filled["rows"]}
+        self.assertEqual(by_from["codice_strano"], "name")
+        self.assertNotEqual(by_from.get("nome"), "inventato")
+        self.assertNotIn("segreto", json.dumps(seen["payload"]))
+        self.assertNotIn("segreto-modello", json.dumps(app.export_config()))
 
 
 if __name__ == "__main__":

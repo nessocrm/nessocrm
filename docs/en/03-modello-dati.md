@@ -36,7 +36,7 @@ One row is an integration.
 
 The columns added after the first creation were not in the file of that time. `init_db` adds them with `ALTER` if `PRAGMA table_info` does not see them. An old file still opens.
 
-`/api/pull/{id}` writes the cursor and the sink and does not update `last_run`. That is why an integration can have rows in `sink_item` and an empty `last_status`. "Run now" goes through `run_pipeline` and does update the three fields.
+`/api/pull/{id}` writes the cursor and the sink and does not update `last_run`. A missing external key stops the cursor before the following records. That is why an integration can have rows in `sink_item` and an empty `last_status`. "Run now" goes through `run_pipeline` and does update the three fields.
 
 ## connection
 

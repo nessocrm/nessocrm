@@ -36,7 +36,7 @@ Una riga è un'integrazione.
 
 Le colonne aggiunte dopo la prima creazione non c'erano nel file di allora. `init_db` le aggiunge con `ALTER` se `PRAGMA table_info` non le vede. Un file vecchio si apre ancora.
 
-`/api/pull/{id}` scrive il cursore e il sink e non aggiorna `last_run`. Per questo un'integrazione può avere righe in `sink_item` e `last_status` vuoto. «Esegui ora» passa da `run_pipeline` e invece aggiorna i tre campi.
+`/api/pull/{id}` scrive il cursore e il sink e non aggiorna `last_run`. Una chiave esterna mancante ferma il cursore prima dei record successivi. Per questo un'integrazione può avere righe in `sink_item` e `last_status` vuoto. «Esegui ora» passa da `run_pipeline` e invece aggiorna i tre campi.
 
 ## connection
 

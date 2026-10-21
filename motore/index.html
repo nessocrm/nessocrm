@@ -984,7 +984,18 @@
     }
 
     function emptyRow() {
-      return { from: "", role: "field", to: "", lookupEntity: "", lookupBy: "", transform: "copy", constant: "", valueMap: "", onMiss: "fail", owner: "sorgente" };
+      return { from: "", role: "field", to: "", lookupEntity: "", lookupBy: "", transform: "copy", constant: "", valueMap: "", onMiss: "fail", owner: "sorgente", fieldType: "", fieldOptions: "" };
+    }
+
+    function guessType(sample) {
+      const text = String(sample || "").trim();
+      if (!text) return "varchar";
+      if (/^(si|sì|no|true|false)$/i.test(text)) return "bool";
+      if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(text)) return "datetime";
+      if (/^\d{4}-\d{2}-\d{2}$/.test(text) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(text)) return "date";
+      if (/^-?\d+$/.test(text)) return "int";
+      if (/^-?\d+[.,]\d+$/.test(text)) return "float";
+      return "varchar";
     }
 
     function blankDraft() {
@@ -1158,7 +1169,7 @@
           <span class="hint">Facoltative, separate da virgola. Per un gruppo: il codice società, oltre al codice cliente. La chiave è la concatenazione. Una colonna sola resta il caso normale.</span>
         </label>
         <p id="chiave-esempio" class="hint"></p>`;
-      const tools = outbound ? "" : `<div class="actions" data-cambia><button type="button" class="secondary" id="proponi">Proponi l'abbinamento</button><button type="button" class="secondary" data-ricetta="anagrafiche">Ricetta anagrafiche</button><button type="button" class="secondary" data-ricetta="contatti">Ricetta contatti</button><button type="button" class="secondary" data-ricetta="sedi">Ricetta sedi</button><button type="button" class="secondary" data-ricetta="listino">Ricetta listino</button></div><p class="hint">Non è un connettore certificato con un gestionale. È un abbinamento pronto da rivedere.</p>`;
+      const tools = outbound ? "" : `<div class="actions" data-cambia><button type="button" class="secondary" id="proponi">Proponi l'abbinamento</button><button type="button" class="secondary" id="modello">Completa le colonne vuote</button><button type="button" class="secondary" data-ricetta="anagrafiche">Ricetta anagrafiche</button><button type="button" class="secondary" data-ricetta="contatti">Ricetta contatti</button><button type="button" class="secondary" data-ricetta="sedi">Ricetta sedi</button><button type="button" class="secondary" data-ricetta="listino">Ricetta listino</button></div><p class="hint">Non è un connettore certificato con un gestionale. È un abbinamento pronto da rivedere. Il modello, se c'è, riempie solo le colonne ancora vuote e non salva.</p>`;
       return `${identity}${tools}<div id="campione" class="hint"></div><div id="map-rows">${rows}</div><button type="button" class="secondary" id="add-row">Aggiungi un abbinamento</button>`;
     }
 
@@ -1172,8 +1183,12 @@
         </fieldset>`;
       }
       const role = row.role || "field";
+      const chosenType = row.fieldType || guessType(row.reading || row.sample);
+      const typeOptions = fieldTypes.map(([value, label]) => `<option value="${value}" ${value === chosenType ? "selected" : ""}>${label}</option>`).join("");
       const fieldBlock = draft.entityMode === "new"
-        ? `<label>Nome del campo nuovo <input class="field-label" value="${esc(row.to)}" autocomplete="off"></label>`
+        ? `<label>Nome del campo nuovo <input class="field-label" value="${esc(row.to)}" autocomplete="off"></label>
+          <label>Tipo del campo nuovo <select class="field-type">${typeOptions}</select><span class="hint">Senza una scelta resta un testo. Un campo già presente non viene ricreato.</span></label>
+          <label class="as-field-enum" ${chosenType === "enum" ? "" : "hidden"}>Valori del campo, uno per riga <textarea class="field-options">${esc(row.fieldOptions || "")}</textarea></label>`
         : `<label>Campo di Espo <select class="espo"><option value="">Scegli</option>${options(fieldChoices(draft.espoEntity, false), "name", "label", row.to)}</select></label>`;
       const foreign = catalog.filter(item => item.name !== draft.espoEntity);
       const foreignName = row.lookupEntity || (foreign[0] && foreign[0].name);
@@ -1251,7 +1266,7 @@
         form.querySelectorAll("[data-row]").forEach(row => {
           const role = row.querySelector(".role");
           if (role) row.querySelectorAll(".role").forEach(input => input.addEventListener("change", () => paint(false)));
-          row.querySelectorAll(".transform").forEach(input => input.addEventListener("change", () => paint(false)));
+          row.querySelectorAll(".transform, .field-type").forEach(input => input.addEventListener("change", () => paint(false)));
           row.querySelectorAll(".foreign").forEach(foreign => foreign.addEventListener("change", () => paint(false)));
           const remove = row.querySelector(".remove");
           remove.addEventListener("click", () => {
@@ -1271,6 +1286,8 @@
       });
       const proponi = document.querySelector("#proponi");
       if (proponi) proponi.addEventListener("click", () => proposeMapping(paint));
+      const modello = document.querySelector("#modello");
+      if (modello) modello.addEventListener("click", () => completeMapping(paint));
       form.querySelectorAll("[data-ricetta]").forEach(button => {
         button.addEventListener("click", () => applyRecipe(button.dataset.ricetta, paint));
       });
@@ -1339,6 +1356,34 @@
       const identityInput = document.querySelector("[name=externalIdField]");
       if (identityInput) identityInput.value = draft.externalIdField || "";
       say(t("Proposta applicata. Non è stata scritta finché non salvi."));
+    }
+
+    async function completeMapping(paint) {
+      readStep(3);
+      let samples = draft.samples || [];
+      if (!samples.length && draft.connectionId) {
+        const response = await fetch("/api/connections/" + draft.connectionId + "/campione", { method: "POST" });
+        const data = await response.json();
+        samples = data.rows || [];
+        draft.samples = samples;
+      }
+      const stored = ((connectionOf(draft.connectionId) || {}).config || {}).columns || [];
+      const columns = stored.length ? stored : (samples.length ? Object.keys(samples[0]) : draft.rows.map(row => row.from).filter(Boolean));
+      const response = await fetch("/api/proponi/modello", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ columns, fields: catalogFields(draft.espoEntity), samples: samples.slice(0, 3) })
+      });
+      const data = await response.json();
+      if (!response.ok) return showError(data.error || "Non sono riuscito a salvare.");
+      if (!data.model) {
+        say(t("Non c'è un modello configurato. La proposta per sinonimi resta."));
+        return;
+      }
+      const byFrom = new Map((data.rows || []).filter(row => row.to).map(row => [row.from, row.to]));
+      draft.rows = draft.rows.map(row => row.to ? row : { ...row, to: byFrom.get(row.from) || "" });
+      paint(true);
+      say(t("Colonne vuote completate. Non è stata scritta finché non salvi."));
     }
 
     async function applyRecipe(id, paint) {
@@ -1518,7 +1563,9 @@
             constant: (row.querySelector(".constant") || {}).value ? row.querySelector(".constant").value.trim() : "",
             valueMap: (row.querySelector(".value-map") || {}).value || "",
             onMiss: miss ? miss.value : "fail",
-            owner: (row.querySelector(".owner") || {}).value || "sorgente"
+            owner: (row.querySelector(".owner") || {}).value || "sorgente",
+            fieldType: (row.querySelector(".field-type") || {}).value || "",
+            fieldOptions: (row.querySelector(".field-options") || {}).value || ""
           };
         });
         if (!outbound && !draft.externalIdField) return "Indica la colonna che identifica il record.";
@@ -1569,7 +1616,12 @@
         if (row.role === "links") {
           return { from: row.from, to: row.to, role: "links", lookupEntity: row.lookupEntity, lookupBy: row.lookupBy, onMiss: row.onMiss || "fail" };
         }
-        return { from: row.from, to: row.to, role: "field", transform, valueMap, owner: row.owner || "sorgente" };
+        const item = { from: row.from, to: row.to, role: "field", transform, valueMap, owner: row.owner || "sorgente" };
+        if (draft.entityMode === "new" && row.fieldType) {
+          item.fieldType = row.fieldType;
+          if (row.fieldType === "enum") item.options = String(row.fieldOptions || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+        }
+        return item;
       });
       const body = {
         id: draft.id || undefined,

@@ -23,7 +23,7 @@ The cursor starts from `1970-01-01 00:00:00` if the integration does not yet hav
 
 The read is in pages of 50. First it completes the records with the same `modifiedAt` as the cursor and a greater id. Then it takes the later `modifiedAt` values. If a page is full of one instant, it continues by id, so nobody is left out. A run stops at 1000 records. The select always includes `id` and `modifiedAt`.
 
-`/api/pull` writes the sink and then the cursor, because the delivery is the read. The HTTP send does not use this path.
+`/api/pull` writes the sink and then the cursor, because the delivery is the read. If an external key is missing it stops: the records after that do not leave and do not enter the sink. The HTTP send does not use this path: the cursor stays on the last POST that succeeded.
 
 Cursors present on 17/10/2026:
 
