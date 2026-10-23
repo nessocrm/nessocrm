@@ -23,6 +23,8 @@ The cursor starts from `1970-01-01 00:00:00` if the integration does not yet hav
 
 The read is in pages of 50. First it completes the records with the same `modifiedAt` as the cursor and a greater id. Then it takes the later `modifiedAt` values. If a page is full of one instant, it continues by id, so nobody is left out. A run stops at 1000 records. The select always includes `id` and `modifiedAt`.
 
+If `portal_json` is null or off, the records are the same as before. If the rule is on, the select also asks for `teamsNames` and a record of another team does not leave. The cursor advances on the last record that left. A team change updates `modifiedAt` and the record is read again. Nesso does not change the portal roles in Espo.
+
 `/api/pull` writes the sink and then the cursor, because the delivery is the read. If an external key is missing it stops: the records after that do not leave and do not enter the sink. The HTTP send does not use this path: the cursor stays on the last POST that succeeded.
 
 Cursors present on 17/10/2026:

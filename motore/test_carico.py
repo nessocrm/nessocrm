@@ -652,6 +652,18 @@ class Evolutive(unittest.TestCase):
         self.assertEqual(len(asked["columns"][0]["cells"]), 3)
         self.assertNotIn("segreto", json.dumps(asked))
         self.assertNotIn("password", json.dumps(asked))
+        self.assertEqual(carico.seal_secret("locale-db", ""), "locale-db")
+        self.assertEqual(carico.open_secret("locale-db", "chiave"), "locale-db")
+        sealed = carico.seal_secret("locale-db", "chiave")
+        self.assertNotEqual(sealed, "locale-db")
+        self.assertTrue(sealed.startswith("enc1:"))
+        self.assertEqual(carico.open_secret(sealed, "chiave"), "locale-db")
+        self.assertEqual(carico.seal_secret(sealed, "chiave"), sealed)
+        with self.assertRaises(RuntimeError):
+            carico.open_secret(sealed, "")
+        self.assertEqual(carico.retry_wait(0), 1)
+        self.assertEqual(carico.retry_wait(1), 2)
+        self.assertLessEqual(carico.retry_wait(40), 24 * 60)
 
 
 if __name__ == "__main__":

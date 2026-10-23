@@ -5,6 +5,7 @@ Il giro le applica. I test le verificano da sole.
 
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import hmac
@@ -1487,6 +1488,67 @@ def write_back_sql(enabled: bool, table: str, key_column: str, columns: list[str
         f"UPDATE {quote_ident(table, engine)} SET {sets} "
         f"WHERE {quote_ident(key_column, engine)} = ?"
     )
+
+
+SECRET_FIELDS = (
+    "password", "token", "headerValue", "clientSecret", "signSecret",
+    "accessToken", "refreshToken", "tunnelPassword",
+)
+
+
+def _keystream(key: str, nonce: bytes, size: int) -> bytes:
+    out = b""
+    counter = 0
+    while len(out) < size:
+        out += hmac.new(key.encode(), nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest()
+        counter += 1
+    return out[:size]
+
+
+def seal_secret(value: str, key: str) -> str:
+    text = str(value or "")
+    if not text or not str(key or "").strip() or text.startswith("enc1:"):
+        return text
+    raw = text.encode()
+    nonce = secrets.token_bytes(16)
+    stream = _keystream(key, nonce, len(raw))
+    cipher = bytes(left ^ right for left, right in zip(raw, stream))
+    return "enc1:" + base64.urlsafe_b64encode(nonce + cipher).decode()
+
+
+def open_secret(value: str, key: str) -> str:
+    text = str(value or "")
+    if not text.startswith("enc1:"):
+        return text
+    if not str(key or "").strip():
+        raise RuntimeError("manca la chiave dei segreti")
+    blob = base64.urlsafe_b64decode(text[5:].encode())
+    nonce, cipher = blob[:16], blob[16:]
+    stream = _keystream(key, nonce, len(cipher))
+    return bytes(left ^ right for left, right in zip(cipher, stream)).decode()
+
+
+def seal_config(config: dict, key: str) -> dict:
+    out = dict(config)
+    if not str(key or "").strip():
+        return out
+    for name in SECRET_FIELDS:
+        if out.get(name):
+            out[name] = seal_secret(str(out[name]), key)
+    return out
+
+
+def open_config(config: dict, key: str) -> dict:
+    out = dict(config)
+    for name in SECRET_FIELDS:
+        if out.get(name):
+            out[name] = open_secret(str(out[name]), key)
+    return out
+
+
+def retry_wait(attempts: int) -> int:
+    step = min(max(int(attempts), 0), 10)
+    return min(2 ** step, 24 * 60)
 
 
 def portal_visible(rule: dict | None, record: dict) -> bool:

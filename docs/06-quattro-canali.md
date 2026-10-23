@@ -144,6 +144,6 @@ Ogni 30 secondi, le integrazioni con `schedule_minutes > 0` e `connection_id` va
 
 Un webhook pianificato ogni 15 minuti non riceve dati da solo: il giro fa la stessa cosa di «Esegui ora», cioè segna «in attesa». La cadenza ha senso per database, CSV, Excel, SFTP, FTPS e HTTP.
 
-Un'eccezione dentro `run_pipeline` viene stampata e l'integrazione al giro dopo è di nuovo candidata, perché `mark_run` ha comunque scritto `last_run` nel ramo di errore prima di rilanciare. Non c'è backoff oltre l'intervallo configurato.
+Un'eccezione dentro `run_pipeline` viene stampata e `mark_run` scrive `last_run` nel ramo di errore prima di rilanciare. Il prossimo tentativo aspetta l'intervallo intero. Con `retry_failed` a `1` l'orologio non si sposta.
 
-Il lucchetto è globale. Due integrazioni scadute nello stesso controllo partono una dopo l'altra, non insieme. Se la prima tiene il lucchetto, la seconda riceve l'errore «un'esecuzione è già in corso», che viene scritto in `last_status` e fa slittare il prossimo tentativo di un intervallo intero.
+Il lucchetto è per integrazione. Due integrazioni diverse, scadute nello stesso controllo, partono insieme, ognuna nel suo thread. La stessa integrazione, se è già in corso, viene saltata. «Esegui ora» sulla stessa riceve «un'esecuzione è già in corso», che viene scritto in `last_status`. Webhook, inbox, ingest diretto e pull diretto non prendono il lucchetto.

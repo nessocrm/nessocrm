@@ -37,7 +37,7 @@ The Espo image is `espocrm/espocrm:10.0`. The production backup is 10.0.8. The d
 | Espo preparation | daemon thread | Waits until Espo answers, then creates the base fields |
 | Scheduler | daemon thread | Every 30 seconds looks at integrations that have a cadence |
 
-`RUN_LOCK` is a single lock. "Run now" and the scheduler take it without waiting: if it is busy, the call receives "a run is already in progress". Webhook, inbox, direct ingest and direct pull do not take it. A site POST can therefore happen while a database run is open.
+The lock is one per integration. "Run now" and the scheduler take it without waiting: if that integration is already running, the call receives "a run is already in progress". Two different integrations can run together. Webhook, inbox, direct ingest and direct pull do not take it. A site POST can therefore happen while a database run is open.
 
 ## Startup sequence
 

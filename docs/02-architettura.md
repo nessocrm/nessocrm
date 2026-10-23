@@ -37,7 +37,7 @@ L'immagine Espo è `espocrm/espocrm:10.0`. Il backup di produzione è 10.0.8. Il
 | Preparazione Espo | thread demone | Attende che Espo risponda, poi crea i campi base |
 | Pianificatore | thread demone | Ogni 30 secondi guarda le integrazioni con cadenza |
 
-`RUN_LOCK` è un lucchetto unico. «Esegui ora» e il pianificatore lo prendono senza attendere: se è occupato, la chiamata riceve «un'esecuzione è già in corso». Webhook, inbox, ingest diretto e pull diretto non lo prendono. Un POST del sito può quindi avvenire mentre un giro sul database è aperto.
+Il lucchetto è uno per integrazione. «Esegui ora» e il pianificatore lo prendono senza attendere: se quella integrazione è già in corso, la chiamata riceve «un'esecuzione è già in corso». Due integrazioni diverse possono girare insieme. Webhook, inbox, ingest diretto e pull diretto non lo prendono. Un POST del sito può quindi avvenire mentre un giro sul database è aperto.
 
 ## Sequenza di avvio
 

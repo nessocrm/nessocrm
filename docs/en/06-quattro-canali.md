@@ -144,6 +144,6 @@ Every 30 seconds, integrations with `schedule_minutes > 0` and a set `connection
 
 A webhook scheduled every 15 minutes does not receive data by itself: the run does the same thing as "Run now", that is it marks "waiting". The cadence makes sense for database, CSV, Excel, SFTP, FTPS and HTTP.
 
-An exception inside `run_pipeline` is printed and the integration is a candidate again on the next cycle, because `mark_run` has anyway written `last_run` in the error branch before re-raising. There is no backoff beyond the configured interval.
+An exception inside `run_pipeline` is printed and `mark_run` writes `last_run` in the error branch before re-raising. The next attempt waits the whole interval. With `retry_failed` set to `1` the clock does not move.
 
-The lock is global. Two integrations due in the same check start one after the other, not together. If the first holds the lock, the second receives the error "a run is already in progress", which is written in `last_status` and shifts the next attempt by a whole interval.
+The lock is per integration. Two different integrations, due in the same check, start together, each in its own thread. The same integration, if it is already running, is skipped. "Run now" on the same one receives "a run is already in progress", which is written in `last_status`. Webhook, inbox, direct ingest and direct pull do not take the lock.

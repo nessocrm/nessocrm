@@ -204,7 +204,7 @@ Optional body `{"withDependencies": true}`. If it is true, the integration named
 | csv | `rows`, `created`, `updated`, `unchanged`, `closed`, `failed`, `status` |
 | http | `{"sent": 3, "url": "...", "failed": false}` |
 
-409 of contention on the lock: 400 "a run is already in progress". Even in that case, if the exception leaves `run_pipeline`, `mark_run` marks an error. The `finally` releases the lock.
+409 of contention on that integration's lock: 400 "a run is already in progress". Even in that case, if the exception leaves `run_pipeline`, `mark_run` marks an error. The `finally` releases the lock. Another integration can run at the same time.
 
 ## POST /api/pipelines/{id}/dry
 

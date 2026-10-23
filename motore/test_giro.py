@@ -1041,11 +1041,11 @@ class Evolutive(unittest.TestCase):
         app.SCAMBIO = Path(os.environ["SCAMBIO_DIR"])
         app.init_db()
         with app.connect() as conn:
-            for table in ("pipeline", "connection", "queue_item", "scarto", "delivery", "run_log", "cursor_state", "sink_item", "chiave", "mapping_version", "mail_queue", "sheet_field"):
+            for table in ("pipeline", "connection", "queue_item", "scarto", "delivery", "run_log", "cursor_state", "sink_item", "chiave", "mapping_version", "mail_queue", "sheet_field", "retry_item"):
                 conn.execute(f"DELETE FROM {table}")
+            conn.execute("DELETE FROM setting WHERE key IN ('model_url', 'retry_queue', 'retry_failed')")
         self.saved = (app.espo_request, app.espo_page, app.post_json, app.read_database, app.write_source, app.send_smtp, app.ask_model)
-        with app.connect() as conn:
-            conn.execute("DELETE FROM setting WHERE key = 'model_url'")
+        os.environ.pop("NESSO_SECRET_KEY", None)
 
     def tearDown(self):
         app.espo_request, app.espo_page, app.post_json, app.read_database, app.write_source, app.send_smtp, app.ask_model = self.saved
@@ -1410,6 +1410,225 @@ class Evolutive(unittest.TestCase):
         self.assertNotEqual(by_from.get("nome"), "inventato")
         self.assertNotIn("segreto", json.dumps(seen["payload"]))
         self.assertNotIn("segreto-modello", json.dumps(app.export_config()))
+
+    def test_due_integrazioni_possono_girare_insieme(self):
+        self._account("prima", "[]")
+        self._account("seconda", "[]")
+        self._account("figlia", "[]", depends_on="prima")
+        gate = threading.Event()
+        entered = []
+        real = app.execute_pipeline
+
+        def fake(pipeline_id):
+            entered.append(pipeline_id)
+            if pipeline_id == "prima":
+                gate.wait(3)
+            return {"taken": 0}
+
+        app.execute_pipeline = fake
+        first = threading.Thread(target=lambda: app.run_pipeline("prima"))
+        try:
+            first.start()
+            for _ in range(50):
+                if "prima" in entered:
+                    break
+                threading.Event().wait(0.02)
+            second = threading.Thread(target=lambda: app.run_pipeline("seconda"))
+            second.start()
+            second.join(2)
+            self.assertIn("seconda", entered)
+            with self.assertRaises(RuntimeError) as caught:
+                app.run_pipeline("prima")
+            self.assertIn("già in corso", str(caught.exception))
+        finally:
+            gate.set()
+            first.join(2)
+            app.execute_pipeline = real
+        order = []
+
+        def sequence(pipeline_id):
+            order.append(pipeline_id)
+            return {"taken": 0}
+
+        app.execute_pipeline = sequence
+        try:
+            app.run_pipeline("figlia", True)
+            self.assertEqual(order, ["prima", "figlia"])
+            order.clear()
+
+            def failing(pipeline_id):
+                if pipeline_id == "prima":
+                    raise RuntimeError("padre fermo")
+                order.append(pipeline_id)
+                return {"taken": 0}
+
+            app.execute_pipeline = failing
+            app.run_pipeline("figlia", True)
+            self.assertEqual(order, ["figlia"])
+        finally:
+            app.execute_pipeline = real
+
+    def test_la_coda_di_ritento_resta_spenta(self):
+        self._account("clienti", '[{"from":"codice","to":"name","transform":"copy"}]')
+        calls = []
+        real = app.ingest_row
+
+        def fake(pipeline_id, payload, hold=False):
+            calls.append(payload)
+            return {"status": "scritto"}
+
+        app.ingest_row = fake
+        try:
+            app.remember_reject("clienti", "C1", {"codice": "C1", "password": "locale-db"}, "data")
+            app.remember_reject("clienti", "", {"codice": ""}, "manca una colonna")
+            with app.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO retry_item (pipeline_id, external_id, payload_json, attempts, next_at, status)
+                    VALUES ('clienti', 'C9', '{}', 0, '2000-01-01 00:00:00', 'attesa')
+                    """
+                )
+            self.assertEqual(app.retry_rejects(), 0)
+            self.assertEqual(calls, [])
+            with app.connect() as conn:
+                queued = conn.execute("SELECT COUNT(*) AS n FROM retry_item WHERE external_id = 'C1'").fetchone()["n"]
+            self.assertEqual(queued, 0)
+        finally:
+            app.ingest_row = real
+
+    def test_il_ritento_aspetta_e_non_rimanda_il_fatto(self):
+        self._account("clienti", '[{"from":"codice","to":"name","transform":"copy"}]')
+        app.set_setting("retry_queue", "1")
+        calls = []
+        real = app.ingest_row
+
+        def fake(pipeline_id, payload, hold=False):
+            calls.append(payload.get("codice"))
+            if payload.get("codice") == "C2":
+                return {"status": "scartato", "detail": "data"}
+            return {"status": "scritto"}
+
+        app.ingest_row = fake
+        try:
+            app.remember_reject("clienti", "C1", {"codice": "C1"}, "data")
+            self.assertEqual(app.retry_rejects(), 0)
+            self.assertEqual(calls, [])
+            with app.connect() as conn:
+                conn.execute("UPDATE retry_item SET next_at = '2000-01-01 00:00:00' WHERE external_id = 'C1'")
+            self.assertEqual(app.retry_rejects(), 1)
+            self.assertEqual(calls, ["C1"])
+            self.assertEqual(app.retry_rejects(), 0)
+            app.remember_reject("clienti", "C2", {"codice": "C2", "password": "locale-db"}, "data")
+            with app.connect() as conn:
+                conn.execute("UPDATE retry_item SET next_at = '2000-01-01 00:00:00' WHERE external_id = 'C2'")
+            app.retry_rejects()
+            with app.connect() as conn:
+                row = conn.execute("SELECT status, attempts, next_at FROM retry_item WHERE external_id = 'C2'").fetchone()
+            self.assertEqual(row["status"], "attesa")
+            self.assertEqual(row["attempts"], 1)
+            self.assertGreater(row["next_at"], "2000-01-01 00:00:00")
+            self.assertNotIn("locale-db", row["next_at"])
+        finally:
+            app.ingest_row = real
+            app.set_setting("retry_queue", "0")
+
+    def test_dopo_un_errore_l_intervallo_resta_intero(self):
+        self._account("clienti", "[]")
+        with app.connect() as conn:
+            conn.execute("UPDATE pipeline SET last_run = '2026-10-21 08:00:00' WHERE id = 'clienti'")
+        app.mark_run("clienti", "errore", "boom")
+        with app.connect() as conn:
+            moved = conn.execute("SELECT last_run FROM pipeline WHERE id = 'clienti'").fetchone()["last_run"]
+        self.assertNotEqual(moved, "2026-10-21 08:00:00")
+        with app.connect() as conn:
+            conn.execute("UPDATE pipeline SET last_run = '2026-10-21 08:00:00' WHERE id = 'clienti'")
+        app.set_setting("retry_failed", "1")
+        try:
+            app.mark_run("clienti", "errore", "ancora")
+            with app.connect() as conn:
+                row = conn.execute("SELECT last_run, last_status FROM pipeline WHERE id = 'clienti'").fetchone()
+            self.assertEqual(row["last_run"], "2026-10-21 08:00:00")
+            self.assertEqual(row["last_status"], "errore")
+        finally:
+            app.set_setting("retry_failed", "0")
+
+    def test_il_portale_spento_non_cambia_il_pull(self):
+        rows = [
+            {"id": "a1", "modifiedAt": "2026-10-21 10:00:00", "name": "Nord", "teamsNames": ["Acquisti"]},
+            {"id": "a2", "modifiedAt": "2026-10-21 11:00:00", "name": "Sud", "teamsNames": ["Vendite"]},
+        ]
+        seen = {}
+
+        def page(entity, select, where, order_by):
+            seen["select"] = select
+            return rows
+
+        app.espo_page = page
+        with app.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline
+                (id, name, direction, espo_entity, external_id_field, key_template, mapping_json, key_field)
+                VALUES ('uscita-p', 'Uscita', 'out', 'Account', 'id', '', ?, 'cExternalKey')
+                """,
+                ('[{"from":"name","to":"nome","transform":"copy"}]',),
+            )
+        pulled = app.pull("uscita-p")
+        self.assertEqual(pulled["exported"], 2)
+        self.assertNotIn("teamsNames", seen["select"])
+        with app.connect() as conn:
+            conn.execute("DELETE FROM cursor_state WHERE pipeline_id = 'uscita-p'")
+            conn.execute(
+                "UPDATE pipeline SET portal_json = ? WHERE id = 'uscita-p'",
+                ('{"enabled": true, "entity": "Account", "team": "Vendite"}',),
+            )
+        pulled = app.pull("uscita-p")
+        self.assertEqual(pulled["exported"], 1)
+        self.assertEqual(pulled["records"], [{"nome": "Sud"}])
+        self.assertIn("teamsNames", seen["select"])
+
+    def test_la_chiave_sigilla_il_salvataggio_nuovo(self):
+        os.environ["NESSO_SECRET_KEY"] = "chiave-di-prova"
+        seen = {}
+
+        def fake_read(config, sample=1, **kwargs):
+            seen["password"] = config.get("password")
+            return [{"codice": "C1"}] if sample else []
+
+        app.read_database = fake_read
+        try:
+            saved = app.save_connection({
+                "name": "Gestionale",
+                "kind": "database",
+                "config": {
+                    "host": "db", "database": "gestionale", "user": "espocrm",
+                    "password": "locale-db", "query": "SELECT codice FROM clienti", "engine": "mysql",
+                },
+            })
+            with app.connect() as conn:
+                raw = conn.execute("SELECT config_json FROM connection WHERE id = ?", (saved["id"],)).fetchone()["config_json"]
+                row = conn.execute("SELECT * FROM connection WHERE id = ?", (saved["id"],)).fetchone()
+            self.assertNotIn("locale-db", raw)
+            self.assertIn("enc1:", raw)
+            shown = app.public_connection(row)
+            self.assertEqual(shown["config"]["password"], "")
+            self.assertNotIn("enc1:", json.dumps(shown))
+            self.assertNotIn("locale-db", json.dumps(shown))
+            opened = app.stored_config(json.dumps({"password": "locale-db", "host": "db"}))
+            self.assertEqual(opened["password"], "locale-db")
+            again = app.save_connection({
+                "id": saved["id"],
+                "name": "Gestionale",
+                "kind": "database",
+                "config": {
+                    "host": "db", "database": "gestionale", "user": "espocrm",
+                    "password": "", "query": "SELECT codice FROM clienti", "engine": "mysql",
+                },
+            })
+            self.assertEqual(again["id"], saved["id"])
+            self.assertEqual(seen["password"], "locale-db")
+        finally:
+            os.environ.pop("NESSO_SECRET_KEY", None)
 
 
 if __name__ == "__main__":

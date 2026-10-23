@@ -23,6 +23,8 @@ Il cursore parte da `1970-01-01 00:00:00` se l'integrazione non ha ancora una ri
 
 La lettura è a pagine da 50. Prima completa i record con lo stesso `modifiedAt` del cursore e id maggiore. Poi prende i `modifiedAt` successivi. Se una pagina è piena di uno stesso istante, continua per id, così nessuno resta fuori. Un giro si ferma a 1000 record. Il select include sempre `id` e `modifiedAt`.
 
+Se `portal_json` è nullo o spento, i record sono gli stessi di prima. Se la regola è accesa, il select chiede anche `teamsNames` e un record di un altro team non esce. Il cursore avanza sull'ultimo record uscito. Un cambio di team aggiorna `modifiedAt` e il record si rilegge. Nesso non modifica i ruoli del portale su Espo.
+
 `/api/pull` scrive il sink e poi il cursore, perché la consegna è la lettura. Se manca una chiave esterna si ferma: i record dopo non escono e non finiscono nel sink. L'invio HTTP non usa questo percorso: il cursore resta sull'ultimo POST riuscito.
 
 Cursori presenti il 17/10/2026:

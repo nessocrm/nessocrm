@@ -41,8 +41,8 @@ The local instance is the public image `espocrm/espocrm:10.0`, installed empty. 
 
 ### Known defects of this version
 
-- One run at a time. The second receives "a run is already in progress".
-- The external database password is in clear text in the SQLite file of the local volume.
+- The same integration does not start twice. The second receives "a run is already in progress". Two different integrations can run together.
+- Without `NESSO_SECRET_KEY` the external database password stays in clear text in the SQLite file of the local volume. With the variable a new save is sealed and an old clear row still opens. If the variable is removed, that connection does not open until the password is typed again. The trial does not set the variable, so this volume stays in clear text.
 - The command `py -3 -m unittest test_carico test_giro test_frasi`, run from `motore/`, covers the channels, the entity and the lookup without a production Espo.
 
 ## Archived
@@ -101,6 +101,16 @@ An integration can wait for several parents, in order. With a single parent the 
 
 The 15 minutes of the scheduler are a fake clock: one second before it does not start, when the time is up it starts once, and it does not start again in the same minute. It is not a quarter of an hour watched on the container. `/api/pull` delivers and advances, and it stops on a missing external key. The HTTP send stays on the last POST that succeeded. On a new entity the step asks for the type; without a choice the field is born as text. "Fill the empty columns" calls a model only when the address is set, fills the columns that are still empty and does not save. Without an address no call starts, and the synonym proposal stays. The address does not enter the download. The tests are in `Giro` and `Evolutive`.
 
+### Together, 23 October 2026
+
+Two different integrations can run at the same time. The same one does not start twice: the second receives "a run is already in progress". If that integration is already running, the scheduler skips it and does not write an error every 30 seconds. After an error `last_run` is updated and the whole interval is waited. Only with `retry_failed` set to `1` does the clock stay where it was.
+
+The retry queue stays off. With `retry_queue` set to `1`, an inbound row that was rejected and has an external identity comes back with a growing wait, from one minute, and it is not written again in the same run. Without an external identity it does not enter the queue. Outbound is not sent again: the HTTP cursor already retries the record that did not leave.
+
+The portal filter stays off. With `portal_json` on, outbound skips records of another team. It does not change the portal roles in Espo. The cursor stays on the last record that left.
+
+Without `NESSO_SECRET_KEY` passwords stay in clear text. With the variable new saves are sealed, a password already in clear text still opens, and the page and the export show neither the text nor the seal. The trial does not set the variable.
+
 ### Switch-on, 19 October 2026
 
 A plan orders integrations that are already saved. The next step can be turned back on only if the previous one was confirmed after its preview, and it does not turn on by itself. An integration outside the plan is paused and resumed as before. A quiet window, for one integration or for all of them, does not write on those days: the file stays where it is. When the window ends it does not start on its own: you confirm it, and then it writes, or you discard it into `scartati/` without touching Espo. With no windows and no plan the run is the one from before. The tests are in the class `FinestraEPiano` and in the runs `la finestra`, `dopo la finestra`, `scartare`, `il piano`.
@@ -140,18 +150,4 @@ The open code respects them.
 
 ## Open
 
-An item stays here until it is in the engine. Those already closed are not repeated. The functions meant to convince a company, distinct from this technical list, are in [Adoption](15-adozione.md).
-
-### Data and visibility
-
-- A retry queue with growing wait, for a silent outbound and for the row whose parent has not arrived yet.
-- Portal: a contact that enters from outside has a path. The visibility rule is there, and it stays off until it is switched on in Espo.
-
-### Use
-
-- Secrets outside SQLite in clear text.
-- Several runs together, or at least one per channel. After an error the scheduler still waits the whole interval.
-
-### In what order
-
-1. The channels, starting from the one a real load cannot read.
+No technical item is open. The functions meant to convince a company are in [Adoption](15-adozione.md).

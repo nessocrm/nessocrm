@@ -25,7 +25,7 @@ Una riga è un'integrazione.
 | `depends_json` | nullo | Elenco di padri, solo se sono più di uno. Il figlio parte quando tutti sono `ok` |
 | `write_back` | default 0 | 1 aggiorna la sorgente, e solo i campi di `write_fields` |
 | `activity_json` | nullo | Compito, chiamata o riunione nati con il record, solo alla creazione |
-| `portal_json` | nullo | Regola di visibilità per un portale. Resta spenta finché non la si accende su Espo |
+| `portal_json` | nullo | Filtro dell'uscita. Nullo o spento, l'uscita non cambia. Acceso, salta i record di un altro team e non modifica i ruoli del portale su Espo |
 | `cursor_column` | nullo | Colonna di variazione del database in ingresso |
 | `enabled` | default 1 | 0 mette in pausa pianificatore e webhook |
 | `on_duplicate` | default `fail` | `fail` scarta il simile con un'altra chiave. `adopt` lo aggiorna |
@@ -45,7 +45,7 @@ Le colonne aggiunte dopo la prima creazione non c'erano nel file di allora. `ini
 | `id` | Slug |
 | `name` | Nome in pagina |
 | `kind` | `webhook`, `database`, `csv`, `http`, `pdf`, `documento`, `sftp`, `ftps` |
-| `config_json` | Vedi sotto. La password del database sta in chiaro in questo file, sul volume locale |
+| `config_json` | Vedi sotto. Senza `NESSO_SECRET_KEY` la password resta in chiaro, sul volume locale. Con la variabile un salvataggio nuovo è sigillato (`enc1:`) e una riga già in chiaro si legge ancora |
 | `token` | Segreto URL-safe di 24 byte. Nasce alla creazione e non viene rigenerato da un aggiornamento |
 
 `config_json` per tipo:
@@ -89,6 +89,8 @@ Una riga per integrazione. In uscita `cursor_value` è `modifiedAt`, una tabulaz
 ## scarto
 
 Una riga per ogni record che non è entrato o non è uscito. Non ha unicità: lo stesso esterno può comparire più volte. `payload_json` è tagliato a 4000 caratteri, `detail` a 500. Cancellare l'integrazione cancella anche questi scarti.
+
+`retry_item` è la coda di ritento, spenta finché `retry_queue` non è `1`. Vale per una riga in ingresso che ha un'identità esterna. Il giro che l'ha scartata non la riscrive: il prossimo tentativo è almeno un minuto dopo, poi l'attesa cresce. Dopo otto tentativi la riga resta `scarto`. L'uscita non usa questa coda.
 
 ## run_log
 

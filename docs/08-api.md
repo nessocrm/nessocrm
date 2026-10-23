@@ -204,7 +204,7 @@ Corpo facoltativo `{"withDependencies": true}`. Se è vero, prima parte l'integr
 | csv | `rows`, `created`, `updated`, `unchanged`, `closed`, `failed`, `status` |
 | http | `{"sent": 3, "url": "...", "failed": false}` |
 
-409 di concorrenza sul lucchetto: 400 «un'esecuzione è già in corso». Anche in quel caso, se l'eccezione esce da `run_pipeline`, `mark_run` segna errore. Il `finally` rilascia il lucchetto.
+409 di concorrenza sul lucchetto di quella integrazione: 400 «un'esecuzione è già in corso». Anche in quel caso, se l'eccezione esce da `run_pipeline`, `mark_run` segna errore. Il `finally` rilascia il lucchetto. Un'altra integrazione può girare nello stesso momento.
 
 ## POST /api/pipelines/{id}/dry
 

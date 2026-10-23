@@ -41,8 +41,8 @@ L'istanza locale è l'immagine pubblica `espocrm/espocrm:10.0`, installata vuota
 
 ### Difetti noti di questa versione
 
-- Gira una esecuzione alla volta. La seconda riceve «un'esecuzione è già in corso».
-- La password del database esterno è in chiaro nel file SQLite del volume locale.
+- La stessa integrazione non parte due volte. La seconda riceve «un'esecuzione è già in corso». Due integrazioni diverse possono girare insieme.
+- Senza `NESSO_SECRET_KEY` la password del database esterno resta in chiaro nel file SQLite del volume locale. Con la variabile un salvataggio nuovo è sigillato e una riga già in chiaro si legge ancora. Tolta la variabile, quel collegamento non si apre finché non si riscrive la password. La prova non imposta la variabile, quindi questo volume resta in chiaro.
 - Il comando `py -3 -m unittest test_carico test_giro test_frasi`, lanciato da `motore/`, copre i canali, la scheda e il lookup senza un Espo di produzione.
 
 ## Archiviate
@@ -101,6 +101,16 @@ Un'integrazione può aspettare più padri, in ordine. Con un padre solo il giro 
 
 I 15 minuti del pianificatore sono un orologio finto: un secondo prima non parte, allo scadere parte una volta, e non riparte nello stesso minuto. Non è un quarto d'ora guardato sul contenitore. `/api/pull` consegna e avanza, e si ferma sulla chiave esterna mancante. L'invio HTTP resta fermo sull'ultimo POST riuscito. Su una scheda nuova il passo chiede il tipo; senza scelta il campo nasce testo. «Completa le colonne vuote» chiama un modello solo se l'indirizzo è impostato, riempie le colonne ancora vuote e non salva. Senza indirizzo non parte nessuna chiamata, e la proposta per sinonimi resta. L'indirizzo non entra nello scarico. I test sono in `Giro` e `Evolutive`.
 
+### Insieme, 23 ottobre 2026
+
+Due integrazioni diverse possono girare nello stesso momento. La stessa non parte due volte: la seconda riceve «un'esecuzione è già in corso». Il pianificatore, se quella integrazione è già in corso, la salta e non scrive un errore ogni 30 secondi. Dopo un errore `last_run` si aggiorna e si aspetta l'intervallo intero. Solo con `retry_failed` a `1` l'orologio resta fermo.
+
+La coda di ritento sta spenta. Con `retry_queue` a `1` una riga in ingresso scartata, e che ha un'identità esterna, torna in coda con attesa crescente, da un minuto, e non viene riscritta nello stesso giro. Senza identità esterna non entra in coda. L'uscita non viene rimandata: il cursore HTTP riprova già il record non inviato.
+
+Il filtro del portale sta spento. Con `portal_json` acceso l'uscita salta i record di un altro team. Non cambia i ruoli del portale su Espo. Il cursore resta sull'ultimo record uscito.
+
+Senza `NESSO_SECRET_KEY` le password restano in chiaro. Con la variabile i salvataggi nuovi si sigillano, una password già in chiaro si apre, e la pagina e lo scarico non mostrano né il testo né il sigillo. La prova non imposta la variabile.
+
 ### Accensione, 19 ottobre 2026
 
 Un piano ordina integrazioni già salvate. Il gradino successivo si riattiva solo se il precedente è stato confermato dopo la sua anteprima, e non si accende da solo. Un'integrazione fuori dal piano si mette in pausa e si riattiva come prima. Una finestra di silenzio, per una integrazione o per tutte, non scrive in quei giorni: il file resta dov'è. Finita la finestra non parte da solo: si conferma, e allora scrive, oppure si scarta in `scartati/` senza toccare Espo. Senza finestre e senza piano il giro è quello di prima. I test sono nelle classi `FinestraEPiano` e nei giri `la finestra`, `dopo la finestra`, `scartare`, `il piano`.
@@ -140,18 +150,4 @@ Il codice aperto le rispetta.
 
 ## Aperte
 
-Una voce sta qui finché non è nel motore. Quelle già chiuse non si ripetono. Le funzioni pensate per convincere un'azienda, distinte da questo elenco tecnico, stanno in [Adozione](15-adozione.md).
-
-### Dati e visibilità
-
-- Coda di ritento con attesa crescente, per l'uscita muta e per la riga il cui padre non è ancora arrivato.
-- Portale: un contatto che entra da fuori ha un percorso. La regola di visibilità c'è, e resta spenta finché non la si accende su Espo.
-
-### Uso
-
-- Segreti fuori dal SQLite in chiaro.
-- Più esecuzioni insieme, o almeno una per canale. Dopo un errore il pianificatore aspetta ancora l'intervallo intero.
-
-### In che ordine
-
-1. I canali, a partire da quello che il carico vero non riesce a leggere.
+Nessuna voce tecnica aperta. Le funzioni pensate per convincere un'azienda stanno in [Adozione](15-adozione.md).

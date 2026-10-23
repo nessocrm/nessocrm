@@ -371,6 +371,7 @@ EN = {
     "scegli la scheda Espo": "choose the Espo entity",
     "abbina almeno un campo": "map at least one field",
     "un'esecuzione è già in corso": "a run is already in progress",
+    "manca la chiave dei segreti": "the secret key is missing",
     "la scheda non ha uno stato di chiusura": "the entity has no close status",
     "Nessuna integrazione.": "No integrations.",
     "Esecuzione in corso.": "Run in progress.",

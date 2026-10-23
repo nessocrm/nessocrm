@@ -64,7 +64,7 @@ Uscita. Integrazione su un collegamento HTTP, «Esegui ora». Con URL vuoto, «U
 | Salva collegamento database fallisce | testo nel modulo: host, permesso, oppure «è ammessa una sola SELECT» |
 | Esegui ora sul database segna scartate | `last_detail` ha il primo motivo. Il caso noto è il nome account già usato da un'altra chiave |
 | Una riga CSV non entra | se la colonna c'è, il file è comunque in `elaborati/` e la riga è in Attività. Se manca una colonna obbligatoria, il file resta nella cartella e lo scarto è uno solo |
-| Esegui ora dice che un'esecuzione è già in corso | un altro giro, o il pianificatore, tiene `RUN_LOCK` |
+| Esegui ora dice che un'esecuzione è già in corso | la stessa integrazione è già in corso, da «Esegui ora» o dal pianificatore |
 | L'uscita rimanda sempre gli stessi record | il cursore non avanza. Se manca `modifiedAt` il cursore segue l'id già consegnato; se continua a rimandare, il POST precedente non era riuscito |
 | L'uscita non rimanda un record che in Espo c'è già | il suo `modifiedAt` è minore o uguale al cursore in `cursor_state` |
 | Un campo non è nel menu | tipo non scrivibile, read only, scheda senza tab, oppure cache di 120 secondi appena dopo una creazione |

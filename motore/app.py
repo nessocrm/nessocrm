@@ -31,7 +31,8 @@ ESPO_PASSWORD = os.environ.get("ESPO_PASSWORD", "locale-admin")
 PORT = int(os.environ.get("LISTEN_PORT", "8091"))
 PUBLIC_BASE = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8091").rstrip("/")
 SCAMBIO = Path(os.environ.get("SCAMBIO_DIR", "/scambio"))
-RUN_LOCK = threading.Lock()
+RUN_LOCKS: dict[str, threading.RLock] = {}
+RUN_LOCKS_GUARD = threading.Lock()
 
 STATE = {
     "espo": "in attesa",
@@ -238,6 +239,15 @@ def init_db() -> None:
                 next_at TEXT,
                 last_error TEXT,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS retry_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_at TEXT NOT NULL,
+                status TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS plan_step (
                 pipeline_id TEXT PRIMARY KEY,
@@ -1332,6 +1342,29 @@ def espo_page(entity: str, select: str, where: list[tuple[str, str, str]], order
     return result.get("list") or []
 
 
+def secret_key() -> str:
+    return os.environ.get("NESSO_SECRET_KEY", "")
+
+
+def stored_config(raw: str | None) -> dict:
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return carico.open_config(parsed, secret_key())
+
+
+def pipeline_lock(pipeline_id: str) -> threading.RLock:
+    with RUN_LOCKS_GUARD:
+        lock = RUN_LOCKS.get(pipeline_id)
+        if lock is None:
+            lock = threading.RLock()
+            RUN_LOCKS[pipeline_id] = lock
+        return lock
+
+
 def save_cursor(pipeline_id: str, stamp: str, last_id: str) -> None:
     if not stamp and not last_id:
         return
@@ -1420,6 +1453,19 @@ def collect_changes(entity: str, select: str, cursor_value: str, limit: int) -> 
     return records
 
 
+def portal_rule(row: sqlite3.Row) -> dict | None:
+    raw = row["portal_json"] if "portal_json" in row.keys() else ""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict) and parsed.get("enabled"):
+        return parsed
+    return None
+
+
 def outbound_rows(pipeline_id: str, limit: int = 1000) -> list[dict]:
     with connect() as conn:
         row = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
@@ -1428,7 +1474,11 @@ def outbound_rows(pipeline_id: str, limit: int = 1000) -> list[dict]:
     if row["direction"] != "out":
         raise RuntimeError("la pipeline non è in uscita")
     mapping = json.loads(row["mapping_json"])
-    select = ",".join(sorted({rule["from"] for rule in mapping} | {"id", "modifiedAt"}))
+    portal = portal_rule(row)
+    fields = {rule["from"] for rule in mapping} | {"id", "modifiedAt"}
+    if portal:
+        fields.add("teamsNames")
+    select = ",".join(sorted(fields))
     items = collect_changes(row["espo_entity"], select, load_cursor(pipeline_id), limit)
     items.sort(key=lambda item: (item.get("modifiedAt") or "", item.get("id") or ""))
     records = []
@@ -1445,6 +1495,16 @@ def outbound_rows(pipeline_id: str, limit: int = 1000) -> list[dict]:
                 outgoing[rule["to"]] = external
             elif value is not None:
                 outgoing[rule["to"]] = value
+        if portal and not missing_key:
+            teams = item.get("teamsNames") or []
+            if isinstance(teams, str):
+                teams = [teams]
+            visible = carico.portal_visible(
+                {**portal, "entity": row["espo_entity"]},
+                {"entity": row["espo_entity"], "teams": teams},
+            )
+            if not visible:
+                continue
         records.append({
             "espoId": item.get("id"),
             "modifiedAt": item.get("modifiedAt") or "",
@@ -1551,7 +1611,7 @@ def source_rows_of(pipeline: sqlite3.Row, link: sqlite3.Row | None) -> list[dict
             rows.extend(file_rows)
         return rows
     if link["kind"] == "database":
-        config = json.loads(link["config_json"])
+        config = stored_config(link["config_json"])
         return read_database(config)
     return None
 
@@ -2762,8 +2822,19 @@ def mark_run(pipeline_id: str, status: str, detail: str, counts: dict | None = N
     text = detail[:500]
     raw_counts = json.dumps(counts, ensure_ascii=False) if counts else None
     productive = bool(counts) and any(counts.get(name) for name in ("created", "updated", "unchanged", "closed"))
+    keep_clock = status == "errore" and setting_value("retry_failed") == "1"
     with connect() as conn:
-        if raw_counts is None:
+        if keep_clock and raw_counts is None:
+            conn.execute(
+                "UPDATE pipeline SET last_status = ?, last_detail = ? WHERE id = ?",
+                (status, text, pipeline_id),
+            )
+        elif keep_clock:
+            conn.execute(
+                "UPDATE pipeline SET last_status = ?, last_detail = ?, last_counts = ? WHERE id = ?",
+                (status, text, raw_counts, pipeline_id),
+            )
+        elif raw_counts is None:
             conn.execute(
                 "UPDATE pipeline SET last_run = ?, last_status = ?, last_detail = ? WHERE id = ?",
                 (now, status, text, pipeline_id),
@@ -2806,6 +2877,69 @@ def remember_reject(pipeline_id: str, external_id: str, payload, detail: str) ->
                 time.strftime("%Y-%m-%d %H:%M:%S"),
             ),
         )
+    queue_retry(pipeline_id, (external_id or "")[:180], raw[:4000])
+
+
+def queue_retry(pipeline_id: str, external_id: str, payload: str) -> None:
+    if setting_value("retry_queue") != "1" or not external_id.strip():
+        return
+    nxt = (datetime.now() + timedelta(minutes=carico.retry_wait(0))).strftime("%Y-%m-%d %H:%M:%S")
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM retry_item WHERE pipeline_id = ? AND external_id = ? AND status = 'attesa'",
+            (pipeline_id, external_id),
+        ).fetchone()
+        if existing:
+            return
+        conn.execute(
+            """
+            INSERT INTO retry_item (pipeline_id, external_id, payload_json, attempts, next_at, status)
+            VALUES (?, ?, ?, 0, ?, 'attesa')
+            """,
+            (pipeline_id, external_id, payload, nxt),
+        )
+
+
+def retry_rejects() -> int:
+    if setting_value("retry_queue") != "1":
+        return 0
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM retry_item
+            WHERE status = 'attesa' AND next_at <= ?
+            ORDER BY id LIMIT 20
+            """,
+            (now,),
+        ).fetchall()
+    done = 0
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        result = ingest_row(row["pipeline_id"], payload)
+        with connect() as conn:
+            if result.get("status") != "scartato":
+                conn.execute("UPDATE retry_item SET status = 'fatto' WHERE id = ?", (row["id"],))
+                done += 1
+                continue
+            attempts = int(row["attempts"] or 0) + 1
+            if attempts >= 8:
+                conn.execute(
+                    "UPDATE retry_item SET status = 'scarto', attempts = ? WHERE id = ?",
+                    (attempts, row["id"]),
+                )
+                continue
+            nxt = (datetime.now() + timedelta(minutes=carico.retry_wait(attempts))).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                "UPDATE retry_item SET attempts = ?, next_at = ? WHERE id = ?",
+                (attempts, nxt, row["id"]),
+            )
+    return done
 
 
 def ingest_row(pipeline_id: str, payload: dict, hold: bool = False) -> dict:
@@ -2968,26 +3102,27 @@ def save_connection(body: dict) -> dict:
                 raise RuntimeError("collegamento non trovato")
             token = current["token"]
             previous = json.loads(current["config_json"])
-            if kind == "database" and not str(config.get("password") or "") and previous.get("password"):
-                config["password"] = previous["password"]
-            if kind == "database" and not str(config.get("tunnelPassword") or "") and previous.get("tunnelPassword"):
-                config["tunnelPassword"] = previous["tunnelPassword"]
-            if kind in ("sftp", "ftps") and not str(config.get("password") or "") and previous.get("password"):
-                config["password"] = previous["password"]
+            opened = carico.open_config(previous, secret_key())
+            if kind == "database" and not str(config.get("password") or "") and opened.get("password"):
+                config["password"] = opened["password"]
+            if kind == "database" and not str(config.get("tunnelPassword") or "") and opened.get("tunnelPassword"):
+                config["tunnelPassword"] = opened["tunnelPassword"]
+            if kind in ("sftp", "ftps") and not str(config.get("password") or "") and opened.get("password"):
+                config["password"] = opened["password"]
             if kind == "http":
-                if not config.get("token") and previous.get("token"):
-                    config["token"] = previous["token"]
-                if not config.get("password") and previous.get("password"):
-                    config["password"] = previous["password"]
-                if not config.get("headerValue") and previous.get("headerValue"):
-                    config["headerValue"] = previous["headerValue"]
-                if not config.get("clientSecret") and previous.get("clientSecret"):
-                    config["clientSecret"] = previous["clientSecret"]
+                if not config.get("token") and opened.get("token"):
+                    config["token"] = opened["token"]
+                if not config.get("password") and opened.get("password"):
+                    config["password"] = opened["password"]
+                if not config.get("headerValue") and opened.get("headerValue"):
+                    config["headerValue"] = opened["headerValue"]
+                if not config.get("clientSecret") and opened.get("clientSecret"):
+                    config["clientSecret"] = opened["clientSecret"]
                 for kept in ("accessToken", "refreshToken", "tokenObtained", "expiresIn"):
-                    if previous.get(kept) and not config.get(kept):
-                        config[kept] = previous[kept]
-            if kind == "webhook" and not config.get("signSecret") and previous.get("signSecret"):
-                config["signSecret"] = previous["signSecret"]
+                    if opened.get(kept) and not config.get(kept):
+                        config[kept] = opened[kept]
+            if kind == "webhook" and not config.get("signSecret") and opened.get("signSecret"):
+                config["signSecret"] = opened["signSecret"]
         else:
             connection_id = slugify(name)
             suffix = 2
@@ -3018,7 +3153,7 @@ def save_connection(body: dict) -> dict:
                 kind = excluded.kind,
                 config_json = excluded.config_json
             """,
-            (connection_id, name, kind, json.dumps(config, ensure_ascii=False), token),
+            (connection_id, name, kind, json.dumps(carico.seal_config(config, secret_key()), ensure_ascii=False), token),
         )
     if kind == "csv" or kind == "documento":
         folder = SCAMBIO / connection_id
@@ -3351,11 +3486,12 @@ def store_oauth(connection_id: str, updates: dict) -> None:
         row = conn.execute("SELECT config_json FROM connection WHERE id = ?", (connection_id,)).fetchone()
         if row is None:
             return
-        current = json.loads(row["config_json"])
+        current = carico.open_config(json.loads(row["config_json"]), secret_key())
         current.update(updates)
+        sealed = carico.seal_config(current, secret_key())
         conn.execute(
             "UPDATE connection SET config_json = ? WHERE id = ?",
-            (json.dumps(current, ensure_ascii=False), connection_id),
+            (json.dumps(sealed, ensure_ascii=False), connection_id),
         )
 
 
@@ -3434,7 +3570,7 @@ def accept_hook(
         ).fetchone()
     if row is None or row["kind"] != "webhook" or not hmac.compare_digest(row["token"], token):
         raise PermissionError("collegamento non valido")
-    secret = str(json.loads(row["config_json"] or "{}").get("signSecret") or "")
+    secret = str(stored_config(row["config_json"]).get("signSecret") or "")
     if secret and not carico.signature_matches(secret, raw if raw is not None else b"", signature or ""):
         raise PermissionError("firma non valida")
     if isinstance(body, dict) and isinstance(body.get("records"), list):
@@ -3494,7 +3630,7 @@ def deliver_inbox(connection_id: str, body: dict) -> bool:
         row = conn.execute("SELECT config_json FROM connection WHERE id = ?", (connection_id,)).fetchone()
         if row is None:
             return False
-        config = json.loads(row["config_json"] or "{}")
+        config = stored_config(row["config_json"])
         target = str(config.get("deliverTo") or "").strip()
         if not target:
             return False
@@ -3578,7 +3714,7 @@ def dry_run(pipeline_id: str, sample=None) -> dict:
             except Exception as error:
                 rows.append({"status": "scartato", "detail": str(error)})
         return {"rows": rows}
-    config = json.loads(link["config_json"])
+    config = stored_config(link["config_json"])
     if link["kind"] == "database":
         source = read_database(
             config,
@@ -3866,7 +4002,7 @@ def account_id_for(key: str) -> str:
 
 
 def execute_pdf(pipeline, link, held: bool) -> dict:
-    config = json.loads(link["config_json"] or "{}")
+    config = stored_config(link["config_json"])
     folder_name = str(config.get("documentFolder") or "").strip()
     team_name = str(config.get("team") or "").strip()
     folder = SCAMBIO / link["id"]
@@ -4107,7 +4243,7 @@ def write_source(pipeline: sqlite3.Row, link: sqlite3.Row, rows: list[dict]) -> 
         return 0
     if link is None or link["kind"] != "database":
         return 0
-    config = json.loads(link["config_json"] or "{}")
+    config = stored_config(link["config_json"])
     raw_fields = pipeline["write_fields"] or "[]"
     try:
         columns = json.loads(raw_fields)
@@ -4142,7 +4278,7 @@ def write_source(pipeline: sqlite3.Row, link: sqlite3.Row, rows: list[dict]) -> 
 
 
 def execute_documento(pipeline: sqlite3.Row, link: sqlite3.Row, held: bool) -> dict:
-    config = json.loads(link["config_json"] or "{}")
+    config = stored_config(link["config_json"])
     folder = SCAMBIO / link["id"]
     folder.mkdir(parents=True, exist_ok=True)
     done = folder / "elaborati"
@@ -4303,7 +4439,7 @@ def execute_pipeline(pipeline_id: str) -> dict:
             mark_run(pipeline_id, "ok", detail)
             return result
         raise RuntimeError("collega un sistema esterno prima di eseguire")
-    config = json.loads(link["config_json"])
+    config = stored_config(link["config_json"])
     if link["kind"] == "webhook":
         mark_run(pipeline_id, "ok", "in attesa che il sistema esterno chiami l'indirizzo")
         return {"waiting": True, "url": f"{PUBLIC_BASE}/hook/{link['id']}/{link['token']}"}
@@ -4418,6 +4554,16 @@ def execute_chain(pipeline_id: str, seen: set[str], with_dependencies: bool) -> 
     if pipeline_id in seen:
         raise RuntimeError("le integrazioni si aspettano in cerchio")
     seen.add(pipeline_id)
+    lock = pipeline_lock(pipeline_id)
+    if not lock.acquire(blocking=False):
+        raise RuntimeError("un'esecuzione è già in corso")
+    try:
+        return _execute_chain(pipeline_id, seen, with_dependencies)
+    finally:
+        lock.release()
+
+
+def _execute_chain(pipeline_id: str, seen: set[str], with_dependencies: bool) -> dict:
     with connect() as conn:
         pipeline = conn.execute("SELECT * FROM pipeline WHERE id = ?", (pipeline_id,)).fetchone()
     if pipeline is None:
@@ -4478,7 +4624,8 @@ def run_pipeline(pipeline_id: str, with_dependencies: bool = False) -> dict:
             if decision["action"] == "attesa":
                 note_silence(pipeline_id, decision.get("reason") or "")
             return silence_reply(decision)
-    if not RUN_LOCK.acquire(blocking=False):
+    lock = pipeline_lock(pipeline_id)
+    if not lock.acquire(blocking=False):
         raise RuntimeError("un'esecuzione è già in corso")
     try:
         return execute_chain(pipeline_id, set(), with_dependencies)
@@ -4486,7 +4633,7 @@ def run_pipeline(pipeline_id: str, with_dependencies: bool = False) -> dict:
         mark_run(pipeline_id, "errore", str(error))
         raise
     finally:
-        RUN_LOCK.release()
+        lock.release()
 
 
 def load_pipeline(pipeline_id: str) -> tuple:
@@ -4509,7 +4656,7 @@ def anteprima(pipeline_id: str) -> dict:
             "detail": "Il webhook non ha righe da leggere. L'anteprima si fa quando il sistema esterno chiama.",
             "created": 0, "updated": 0, "closed": 0, "failed": 0, "unchanged": 0, "pericolose": [],
         }
-    config = json.loads(link["config_json"])
+    config = stored_config(link["config_json"])
     counts = fresh_counts()
     seen: set[str] = set()
     full = False
@@ -4672,7 +4819,7 @@ def connection_sample(connection_id: str) -> dict:
             return {"rows": rows[:3]}
         return {"rows": []}
     if row["kind"] == "database":
-        return {"rows": read_database(json.loads(row["config_json"]), limit=3)}
+        return {"rows": read_database(stored_config(row["config_json"]), limit=3)}
     return {"rows": []}
 
 
@@ -5284,6 +5431,13 @@ def close_session(token: str) -> None:
         conn.execute("DELETE FROM session WHERE token = ?", (token,))
 
 
+def _planned(pipeline_id: str) -> None:
+    try:
+        run_pipeline(pipeline_id)
+    except Exception as error:
+        print("[motore] pianificazione", pipeline_id, error)
+
+
 def scheduler() -> None:
     while True:
         time.sleep(30)
@@ -5300,15 +5454,15 @@ def scheduler() -> None:
             for row in rows:
                 if not pipeline_due(row, now):
                     continue
-                try:
-                    run_pipeline(row["id"])
-                except Exception as error:
-                    print("[motore] pianificazione", row["id"], error)
+                if pipeline_lock(row["id"]).locked():
+                    continue
+                threading.Thread(target=_planned, args=(row["id"],), daemon=True).start()
             try:
                 notice_absent()
                 notice_quiet()
                 scan_person_badges()
                 retry_mail()
+                retry_rejects()
                 poll_imap()
             except Exception as error:
                 print("[motore] pianificazione", error)
